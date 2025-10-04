@@ -187,13 +187,15 @@ def dynamic_namespace_items(self, context):
 # -------------------------
 _DYNAMIC_ENTITY_ITEMS = []
 _DYNAMIC_PROPERTY_ITEMS = []
+# map namespace -> (ents, props) to persist presets per-namespace and avoid overwrite
+_PRESET_MAP = {}
 
 def _make_nodeitem_entity(label, class_code, namespace):
-    return NodeItem("CIDOCEntityNodeType", label=label,
+    return NodeItem("ONTO3DEntityNodeType", label=label,
                     settings={"class_code": repr(class_code), "namespace": repr(namespace)})
 
 def _make_nodeitem_property(label, prop_code, namespace):
-    return NodeItem("CIDOCPropertyNodeType", label=label,
+    return NodeItem("ONTO3DPropertyNodeType", label=label,
                     settings={"prop_code": repr(prop_code), "namespace": repr(namespace)})
 
 def build_preset_items(filter_text="", namespaces=None, limit_per_kind=200):
@@ -267,30 +269,50 @@ def rebuild_node_categories_with_presets(entity_items, property_items):
         eitems = ents_by_ns.get(ns, [])
         pitems = props_by_ns.get(ns, [])
         if eitems:
-            base.append(NodeCategory(f"CIDOC_{ns}_ENT", f"{ns} - Entities", items=eitems))
+            base.append(NodeCategory(f"ONTO3D_{ns}_ENT", f"{ns} - Entities", items=eitems))
         if pitems:
-            base.append(NodeCategory(f"CIDOC_{ns}_PROP", f"{ns} - Properties", items=pitems))
+            base.append(NodeCategory(f"ONTO3D_{ns}_PROP", f"{ns} - Properties", items=pitems))
 
     # if still empty, register an empty menu so Add is blank
     try:
-        unregister_node_categories("CIDOC_NODES_CAT")
+        unregister_node_categories("ONTO3D_NODES_CAT")
     except Exception:
         pass
-    register_node_categories("CIDOC_NODES_CAT", base)
+    register_node_categories("ONTO3D_NODES_CAT", base)
     rebuild_dynamic_enums_and_menus()
+
+# ---- helpers to merge NodeItem lists without duplicates ----
+def _nodeitem_unique_key(item):
+    try:
+        lbl = str(getattr(item, "label", ""))
+        settings = getattr(item, "settings", {}) or {}
+        ns = settings.get("namespace", "")
+        cls = settings.get("class_code", settings.get("prop_code", ""))
+        return (lbl, str(ns), str(cls))
+    except Exception:
+        return (str(getattr(item, "label", "")), "", "")
+
+def _merge_nodeitem_lists(existing, new_items):
+    seen = set(_nodeitem_unique_key(i) for i in existing)
+    out = list(existing)
+    for it in new_items:
+        k = _nodeitem_unique_key(it)
+        if k not in seen:
+            out.append(it); seen.add(k)
+    return out
 
 # Scene props for UI state (Blocco B1)
 def _ensure_scene_props():
     sc = bpy.types.Scene
-    if not hasattr(sc, "cidoc_filter_text"):
-        sc.cidoc_filter_text = bpy.props.StringProperty(
+    if not hasattr(sc, "onto3d_filter_text"):
+        sc.onto3d_filter_text = bpy.props.StringProperty(
             name="Filter", description="Filtro testo per codice/label", default="")
-    if not hasattr(sc, "cidoc_limit"):
-        sc.cidoc_limit = bpy.props.IntProperty(
+    if not hasattr(sc, "onto3d_limit"):
+        sc.onto3d_limit = bpy.props.IntProperty(
             name="Max items", description="Limite voci per Entities/Properties",
             default=200, min=10, max=5000)
-    if not hasattr(sc, "cidoc_ns_enum"):
-        sc.cidoc_ns_enum = bpy.props.EnumProperty(
+    if not hasattr(sc, "onto3d_ns_enum"):
+        sc.onto3d_ns_enum = bpy.props.EnumProperty(
             name="Namespaces",
             description="Select the namespaces to include",
             items=lambda self, ctx: [("", "(none)", "")] + [(k, k, "") for k in STORE.data.keys()],
@@ -301,27 +323,27 @@ _ensure_scene_props()
 # -------------------------
 # Sockets
 # -------------------------
-class CIDOCInSocket(NodeSocket):
-    bl_idname = "CIDOCInSocket"; bl_label = "In"
+class ONTO3DInSocket(NodeSocket):
+    bl_idname = "ONTO3DInSocket"; bl_label = "In"
     def draw(self, ctx, layout, node, text): layout.label(text=text) if text else None
     def draw_color(self, ctx, node): return (0.20, 0.60, 1.00, 1.0)
 
-class CIDOCOutSocket(NodeSocket):
-    bl_idname = "CIDOCOutSocket"; bl_label = "Out"
+class ONTO3DOutSocket(NodeSocket):
+    bl_idname = "ONTO3DOutSocket"; bl_label = "Out"
     def draw(self, ctx, layout, node, text): layout.label(text=text) if text else None
     def draw_color(self, ctx, node): return (0.20, 0.60, 1.00, 1.0)
 
 # -------------------------
 # NodeTree
 # -------------------------
-class CIDOCGraphTree(NodeTree):
-    bl_idname = "CIDOCGraphTreeType"; bl_label = "Onto3D"; bl_icon = 'NODETREE'
+class ONTO3DGraphTree(NodeTree):
+    bl_idname = "ONTO3DGraphTreeType"; bl_label = "Onto3D"; bl_icon = 'NODETREE'
 
 # -------------------------
 # Entity Node
 # -------------------------
-class CIDOCEntityNode(Node):
-    bl_idname = "CIDOCEntityNodeType"; bl_label = "CIDOC Entity"; bl_icon = 'OBJECT_DATA'
+class ONTO3DEntityNode(Node):
+    bl_idname = "ONTO3DEntityNodeType"; bl_label = "Onto3D Entity"; bl_icon = 'OBJECT_DATA'
 
     def _dedupe_ports(self):
         def _do(side):
@@ -350,8 +372,8 @@ class CIDOCEntityNode(Node):
     def init(self, ctx):
         while self.inputs: self.inputs.remove(self.inputs[0])
         while self.outputs: self.outputs.remove(self.outputs[0])
-        self.inputs.new("CIDOCInSocket", "in (property)")
-        self.outputs.new("CIDOCOutSocket", "out (property)")
+        self.inputs.new("ONTO3DInSocket", "in (property)")
+        self.outputs.new("ONTO3DOutSocket", "out (property)")
         self._dedupe_ports(); self.label = self.bl_label
 
     def draw_buttons(self, ctx, layout):
@@ -394,8 +416,8 @@ class CIDOCEntityNode(Node):
 # -------------------------
 # Property Node
 # -------------------------
-class CIDOCPropertyNode(Node):
-    bl_idname = "CIDOCPropertyNodeType"; bl_label = "CIDOC Property"; bl_icon = 'DOT'
+class ONTO3DPropertyNode(Node):
+    bl_idname = "ONTO3DPropertyNodeType"; bl_label = "Onto3D Property"; bl_icon = 'DOT'
 
     def _dedupe_ports(self):
         def _do(side):
@@ -418,8 +440,8 @@ class CIDOCPropertyNode(Node):
     def init(self, ctx):
         while self.inputs: self.inputs.remove(self.inputs[0])
         while self.outputs: self.outputs.remove(self.outputs[0])
-        self.inputs.new("CIDOCInSocket", "subject")
-        self.outputs.new("CIDOCOutSocket", "object")
+        self.inputs.new("ONTO3DInSocket", "subject")
+        self.outputs.new("ONTO3DOutSocket", "object")
         self._dedupe_ports(); self.label = self.bl_label
 
     def draw_buttons(self, ctx, layout):
@@ -453,8 +475,8 @@ class CIDOCPropertyNode(Node):
     def init(self, ctx):
         while self.inputs: self.inputs.remove(self.inputs[0])
         while self.outputs: self.outputs.remove(self.outputs[0])
-        self.inputs.new("CIDOCInSocket", "subject")
-        self.outputs.new("CIDOCOutSocket", "object")
+        self.inputs.new("ONTO3DInSocket", "subject")
+        self.outputs.new("ONTO3DOutSocket", "object")
         self._dedupe_ports(); self.label = self.bl_label
 
     def draw_buttons(self, ctx, layout):
@@ -505,8 +527,8 @@ node_categories = [
 # -------------------------
 # UI Panel & Operators
 # -------------------------
-class CIDOC_PT_OntologiesPanel(bpy.types.Panel):
-    bl_idname = "CIDOC_PT_OntologiesPanel"
+class ONTO3D_PT_OntologiesPanel(bpy.types.Panel):
+    bl_idname = "ONTO3D_PT_OntologiesPanel"
     bl_label = "Import Ontologies"
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
@@ -517,7 +539,7 @@ class CIDOC_PT_OntologiesPanel(bpy.types.Panel):
         sc = context.scene
 
         col = layout.column(align=True)
-        col.operator("cidoc.import_ontology", icon='IMPORT')
+        col.operator("onto3d.import_ontology", icon='IMPORT')
         # reload button removed
 
         if not STORE.data:
@@ -532,20 +554,20 @@ class CIDOC_PT_OntologiesPanel(bpy.types.Panel):
             row.label(text=f"Classes: {len(blob['classes'])}")
             row.label(text=f"Properties: {len(blob['properties'])}")
             row2 = box.row(align=True)
-            row2.operator("cidoc.export_namespace", text="Export JSON").ns_key = ns_key
-            row2.operator("cidoc.remove_namespace", text="Remove").ns_key = ns_key
+            row2.operator("onto3d.export_namespace", text="Export JSON").ns_key = ns_key
+            row2.operator("onto3d.remove_namespace", text="Remove").ns_key = ns_key
 
         layout.separator()
         box = layout.box()
         box.label(text="Select Imported Ontology")
         # removed the filter and max limit: Generate will load all selected entities/properties
-        box.prop(sc, "cidoc_ns_enum", text="Namespaces")
+        box.prop(sc, "onto3d_ns_enum", text="Namespaces")
         rowb = box.row(align=True)
-        rowb.operator("cidoc.generate_presets", icon='PLUS')
-        rowb.operator("cidoc.clear_presets", icon='TRASH')
+        rowb.operator("onto3d.generate_presets", icon='PLUS')
+        rowb.operator("onto3d.clear_presets", icon='TRASH')
 
-class CIDOC_OT_ExportNamespace(bpy.types.Operator):
-    bl_idname = "cidoc.export_namespace"; bl_label = "Export Namespace JSON"
+class ONTO3D_OT_ExportNamespace(bpy.types.Operator):
+    bl_idname = "onto3d.export_namespace"; bl_label = "Export Namespace JSON"
     ns_key: bpy.props.StringProperty()
     def execute(self, context):
         if self.ns_key not in STORE.data:
@@ -556,19 +578,42 @@ class CIDOC_OT_ExportNamespace(bpy.types.Operator):
             json.dump(STORE.data[self.ns_key], f, ensure_ascii=False, indent=2)
         self.report({'INFO'}, f"Exported: {path}"); return {'FINISHED'}
 
-class CIDOC_OT_RemoveNamespace(bpy.types.Operator):
-    bl_idname = "cidoc.remove_namespace"; bl_label = "Remove Namespace"
+class ONTO3D_OT_RemoveNamespace(bpy.types.Operator):
+    bl_idname = "onto3d.remove_namespace"; bl_label = "Remove Namespace"
     ns_key: bpy.props.StringProperty()
     def execute(self, context):
         if self.ns_key in STORE.data:
-            del STORE.data[self.ns_key]; rebuild_node_categories_with_presets([], [])
+            del STORE.data[self.ns_key]
+            # also remove any stored presets for that namespace
+            try:
+                _PRESET_MAP.pop(self.ns_key, None)
+            except Exception:
+                pass
+            # rebuild presets for the remaining namespaces (keep others)
+            # recompute merged lists from _PRESET_MAP (fall back to building from STORE)
+            all_ents = []
+            all_props = []
+            if _PRESET_MAP:
+                for e,p in _PRESET_MAP.values():
+                    all_ents = _merge_nodeitem_lists(all_ents, e)
+                    all_props = _merge_nodeitem_lists(all_props, p)
+            else:
+                # fallback: build fresh from STORE
+                remaining = tuple(STORE.namespaces()) if STORE.namespaces() else None
+                total_ents = sum(len(STORE.data[ns]['classes']) for ns in STORE.data) if STORE.data else 0
+                total_props = sum(len(STORE.data[ns]['properties']) for ns in STORE.data) if STORE.data else 0
+                if total_ents == 0 and total_props == 0:
+                    all_ents, all_props = [], []
+                else:
+                    all_ents, all_props = build_preset_items(filter_text="", namespaces=remaining, limit_per_kind=max(total_ents, total_props, 0))
+            rebuild_node_categories_with_presets(all_ents, all_props)
             self.report({'INFO'}, f"Namespace removed:'{self.ns_key}'")
         else:
             self.report({'WARNING'}, "Namespace not found")
         return {'FINISHED'}
 
-class CIDOC_OT_ImportOntology(bpy.types.Operator):
-    bl_idname = "cidoc.import_ontology"; bl_label = "Import RDFS/RDF/OWL"
+class ONTO3D_OT_ImportOntology(bpy.types.Operator):
+    bl_idname = "onto3d.import_ontology"; bl_label = "Import RDFS/RDF/OWL"
     bl_description = "Import ontology from local file and populate the store"
     filter_glob: bpy.props.StringProperty(default="*.rdf;*.rdfs;*.owl;*.ttl;*.xml", options={'HIDDEN'})
     filepath: bpy.props.StringProperty(subtype='FILE_PATH')
@@ -579,7 +624,15 @@ class CIDOC_OT_ImportOntology(bpy.types.Operator):
             rebuild_dynamic_enums_and_menus()
             # generate Add-menu presets automatically for the newly imported namespace
             ents, props = build_preset_items(filter_text="", namespaces=(ns,), limit_per_kind=200)
-            rebuild_node_categories_with_presets(ents, props)
+            # store presets per-namespace and rebuild the global merged menu
+            global _DYNAMIC_ENTITY_ITEMS, _DYNAMIC_PROPERTY_ITEMS, _PRESET_MAP
+            _PRESET_MAP[ns] = (ents, props)
+            merged_ents = []
+            merged_props = []
+            for e,p in _PRESET_MAP.values():
+                merged_ents = _merge_nodeitem_lists(merged_ents, e)
+                merged_props = _merge_nodeitem_lists(merged_props, p)
+            rebuild_node_categories_with_presets(merged_ents, merged_props)
             self.report({'INFO'}, f"Import: '{ns}' "
                                   f"({len(STORE.data[ns]['classes'])} classes, {len(STORE.data[ns]['properties'])} properties)")
         except Exception as e:
@@ -588,12 +641,12 @@ class CIDOC_OT_ImportOntology(bpy.types.Operator):
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self); return {'RUNNING_MODAL'}
 
-class CIDOC_OT_GeneratePresets(bpy.types.Operator):
-    bl_idname = "cidoc.generate_presets"; bl_label = "Add Nodes"
+class ONTO3D_OT_GeneratePresets(bpy.types.Operator):
+    bl_idname = "onto3d.generate_presets"; bl_label = "Add Nodes"
     bl_description = "Generate presets for the selected namespaces"
     def execute(self, context):
         sc = context.scene
-        selected_ns = tuple(sc.cidoc_ns_enum) if sc.cidoc_ns_enum else None
+        selected_ns = tuple(sc.onto3d_ns_enum) if sc.onto3d_ns_enum else None
         # compute the total number of entities/properties for the selected namespaces (or all)
         if selected_ns:
             total_ents = sum(len(STORE.data[ns]['classes']) for ns in selected_ns if ns in STORE.data)
@@ -612,21 +665,22 @@ class CIDOC_OT_GeneratePresets(bpy.types.Operator):
             namespaces=selected_ns,
             limit_per_kind=limit
         )
+        # when user explicitly generates presets replace the current menu with the selection
         rebuild_node_categories_with_presets(ents, props)
         self.report({'INFO'}, f"Generated {len(ents)} entities, {len(props)} properties.")
         return {'FINISHED'}
 
-class CIDOC_OT_ClearPresets(bpy.types.Operator):
-    bl_idname = "cidoc.clear_presets"; bl_label = "Clear Nodes"
+class ONTO3D_OT_ClearPresets(bpy.types.Operator):
+    bl_idname = "onto3d.clear_presets"; bl_label = "Clear Nodes"
     bl_description = "Clear all Add-menu presets"
     def execute(self, context):
         rebuild_node_categories_with_presets([], [])
-        self.report({'INFO'}, "Cleared CIDOC Add-menu presets.")
+        self.report({'INFO'}, "Cleared ONTO3D Add-menu presets.")
         return {'FINISHED'}
 
-class CIDOC_OT_ReloadAddon(bpy.types.Operator):
+class ONTO3D_OT_ReloadAddon(bpy.types.Operator):
     """Reload the Onto3D addon from disk (for development purposes)."""
-    bl_idname = "cidoc.reload_addon"
+    bl_idname = "onto3d.reload_addon"
     bl_label = "Reload Onto3D Addon"
 
     def execute(self, context):
@@ -915,7 +969,7 @@ def _select_objects_in_view(objs, make_active=True):
 def _find_node_by_uuid(node_uuid):
     if not node_uuid: return None
     for ng in bpy.data.node_groups:
-        if ng.bl_idname != "CIDOCGraphTreeType":
+        if ng.bl_idname != "ONTO3DGraphTreeType":
             continue
         for n in ng.nodes:
             if n.get("onto3d_uuid") == node_uuid:
@@ -1175,12 +1229,12 @@ class ONTO3D_PT_ItemProperties(bpy.types.Panel):
 
 # Registration: make sure all classes are listed here (add/remove names as needed)
 classes = (
-    CIDOCInSocket, CIDOCOutSocket, CIDOCGraphTree,
-    CIDOCEntityNode, CIDOCPropertyNode,
-    CIDOC_PT_OntologiesPanel, CIDOC_OT_ExportNamespace,
-    CIDOC_OT_RemoveNamespace, CIDOC_OT_ImportOntology,
-    CIDOC_OT_GeneratePresets, CIDOC_OT_ClearPresets,
-    CIDOC_OT_ReloadAddon,
+    ONTO3DInSocket, ONTO3DOutSocket, ONTO3DGraphTree,
+    ONTO3DEntityNode, ONTO3DPropertyNode,
+    ONTO3D_PT_OntologiesPanel, ONTO3D_OT_ExportNamespace,
+    ONTO3D_OT_RemoveNamespace, ONTO3D_OT_ImportOntology,
+    ONTO3D_OT_GeneratePresets, ONTO3D_OT_ClearPresets,
+    ONTO3D_OT_ReloadAddon,
     ONTO3D_OT_CreateConnection, ONTO3D_OT_BreakConnection, ONTO3D_PT_ConnectGeometry,
     ONTO3D_OT_UpdateConnections,
     ONTO3D_OT_ToggleSyncViews,
@@ -1208,7 +1262,7 @@ def unregister():
             bpy.app.handlers.depsgraph_update_post.remove(_SYNC_HANDLER)
     except Exception:
         pass
-    try: unregister_node_categories("CIDOC_NODES_CAT")
+    try: unregister_node_categories("ONTO3D_NODES_CAT")
     except Exception: pass
     for cls in reversed(classes):
         try:
@@ -1220,13 +1274,13 @@ if __name__ == "__main__":
     register()
     # create a sample visible in the "New" menu of the Node Editor (only if it doesn't already exist)
     if "Onto3D Graph 1" not in bpy.data.node_groups:
-        tree = bpy.data.node_groups.new("Onto3D Graph 1", "CIDOCGraphTreeType")
+        tree = bpy.data.node_groups.new("Onto3D Graph 1", "ONTO3DGraphTreeType")
         # optional: add the tree to the current Node Editor area (if open)
         for area in __onto3d_tag_node_editors() or []:
             if area.type == "NODE_EDITOR":
                 for space in area.spaces:
                     if space.type == 'NODE_EDITOR':
-                        space.tree_type = "CIDOCGraphTreeType"
+                        space.tree_type = "ONTO3DGraphTreeType"
                         space.node_tree = tree
                         break
                 break
