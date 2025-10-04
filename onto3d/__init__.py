@@ -30,7 +30,7 @@ def __onto3d_tag_node_editors():
 bl_info = {
     "name": "Onto3D",
     "author": "Giacomo Mancuso & ChatGPT",
-    "version": (0, 4, 5),
+    "version": (0, 4, 4),
     "blender": (4, 5, 2),
     "location": "Node Editor > N-Panel (Onto3D)",
     "description": "Manage and create an ontological graph in Blender's node editor and connect it to geometry data.",
