@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write  # <<— permette di creare/aggiornare release e caricare asset
+
 jobs:
   build:
     runs-on: ubuntu-latest
