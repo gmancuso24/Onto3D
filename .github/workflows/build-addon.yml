@@ -11,16 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # (Facoltativo ma utile) Verifica che onto3d/ esista nella root
       - name: Check package folder
         run: |
+          echo "Checking that 'onto3d/' exists..."
           ls -la
-          test -d onto3d || (echo "ERROR: 'onto3d/' folder not found at repo root" && exit 1)
+          test -d onto3d || (echo "❌ ERROR: 'onto3d/' folder not found at repo root" && exit 1)
 
-      - name: Create dist folder
+      - name: Create dist directory
         run: mkdir -p dist
 
-      - name: Zip package
+      - name: Zip add-on
         run: zip -r "dist/onto3d-${GITHUB_REF_NAME}.zip" onto3d -x "*/.DS_Store" "*/__pycache__/*"
 
       - name: Upload release asset
