@@ -13,14 +13,14 @@ jobs:
 
       - name: Check package folder
         run: |
-          echo "Checking that 'onto3d/' exists..."
+          echo "Checking that 'onto3d/' exists at repo root..."
           ls -la
           test -d onto3d || (echo "❌ ERROR: 'onto3d/' folder not found at repo root" && exit 1)
 
       - name: Create dist directory
         run: mkdir -p dist
 
-      - name: Zip add-on
+      - name: Zip package
         run: zip -r "dist/onto3d-${GITHUB_REF_NAME}.zip" onto3d -x "*/.DS_Store" "*/__pycache__/*"
 
       - name: Upload release asset
