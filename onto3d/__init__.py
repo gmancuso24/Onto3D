@@ -291,7 +291,8 @@ def _ensure_scene_props():
             default=200, min=10, max=5000)
     if not hasattr(sc, "cidoc_ns_enum"):
         sc.cidoc_ns_enum = bpy.props.EnumProperty(
-            name="Namespaces", description="Seleziona i namespaces da includere",
+            name="Namespaces",
+            description="Select the namespaces to include",
             items=lambda self, ctx: [("", "(none)", "")] + [(k, k, "") for k in STORE.data.keys()],
             options={'ENUM_FLAG'}
         )
