@@ -1,0 +1,55 @@
+# Changelog
+
+All notable changes to **Onto3D** derived from the provided files (`v01` → `v04_2`).  
+Versioning follows **SemVer**: `MAJOR.MINOR.PATCH`.
+
+## [0.4.2] - 2025-10-04
+### Added
+- **Open IRI in Browser**: new operator `onto3d.open_iri` to open the resource IRI in the system browser (button on the node and in the *Item* panel).
+
+### Changed
+- Minor UI/text refinements.
+
+## [0.4.1] - 2025-10-04
+### Added
+- **View helpers** in the Node Editor:
+  - `onto3d.toggle_sync_views` (sync views),
+  - `onto3d.node_zoom_node` (frame selected node),
+  - `onto3d.node_zoom_geometry` (frame linked geometry),
+  - `onto3d.node_isolate_geometry` (isolate/show only linked geometry).
+- **Panel `ONTO3D_PT_ItemProperties`** (N-Panel *Item* section) for node-context tools.
+
+### Changed
+- Minor panel tweaks.
+
+## [0.3.0]
+### Added
+- **Connect Geometry**: new panel `ONTO3D_PT_ConnectGeometry` with operators:
+  - `onto3d.create_connection` (link entity node → one or more objects; supports groups under **Empty**),
+  - `onto3d.break_connection` (unlink),
+  - `onto3d.update_connections` (refresh connection list).
+
+## [0.2.0]
+### Added
+- **Ontology-driven presets**:
+  - `cidoc.generate_presets` (populate Add-menu with classes/properties),
+  - `cidoc.clear_presets` (clear presets),
+  - `cidoc.reload_addon` (quick reload).
+### Changed
+- **N-Panel tab renamed**: from **CIDOC** to **Onto3D**.
+
+## [0.1.0]
+### Added
+- **Initial CIDOC-like graph setup**:
+  - in/out sockets, *Entity* and *Property* nodes, *GraphTree*.
+- **Ontology management** (via lazy `rdflib` import):
+  - `cidoc.import_ontology`, `cidoc.remove_namespace`, `cidoc.export_namespace`.
+- **Panel** `CIDOC_PT_OntologiesPanel` for import & namespaces.
+
+---
+
+### Notes
+- Version mapping for the uploaded files:  
+  `v01 → 0.1.0`, `v02 → 0.2.0`, `v03 → 0.3.0`, `v04_1 → 0.4.1`, `v04_2 → 0.4.2`.
+- Dates reflect the day this changelog was compiled.
+- Distribution for Blender: create a ZIP with a **single top-level package folder** (e.g., `onto3d/`) and attach it to **Releases**.
