@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env (se mai li usi)
+.venv/
+venv/
+env/
+
+# --- Blender ---
+# tieni i .blend (esempi), ignora solo i backup/temp
+*.blend1
+*.blend2
+*.blend@
+*.blend~
+*.tmp
+
+# --- Packaging / build ---
+dist/
+build/
+*.egg-info/
+# evita di committare gli zip delle release
+*.zip
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+
+# --- OS ---
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
