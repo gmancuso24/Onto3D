@@ -11,15 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare folder
-        run: |
-          # Se la tua cartella plugin si chiama "addon", copiala in "onto3d"
-          if [ -d "addon" ]; then
-            rm -rf onto3d
-            cp -r addon onto3d
-          fi
-          mkdir -p dist
-
       - name: Zip package
         run: zip -r "dist/onto3d-${GITHUB_REF_NAME}.zip" onto3d -x "*/.DS_Store" "*/__pycache__/*"
 
