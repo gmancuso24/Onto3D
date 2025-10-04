@@ -1,3 +1,7 @@
+#------------------------------------------------------------
+# ONTO3D
+#------------------------------------------------------------
+
 # ---- Onto3D: window-safe helpers to avoid _RestrictContext -----
 def __onto3d_iter_areas(type_set={'NODE_EDITOR','VIEW_3D'}):
     try:
@@ -26,15 +30,15 @@ def __onto3d_tag_node_editors():
 bl_info = {
     "name": "Onto3D",
     "author": "Giacomo Mancuso & ChatGPT",
-    "version": (0, 4, 2),
+    "version": (0, 4, 5),
     "blender": (4, 5, 2),
     "location": "Node Editor > N-Panel (Onto3D)",
-    "description": "Connect, manage and create an ontological graph in Blender's node editor.",
+    "description": "Manage and create an ontological graph in Blender's node editor and connect it to geometry data.",
     "category": "Node",
 }
 
 # ------------------------------------------------------------
-# Onto3D — CIDOC-like graph nodes with RDF importer + presets
+# Onto3D — Graph nodes with RDF importer + presets
 # ------------------------------------------------------------
 import bpy
 from bpy.types import NodeTree, Node, NodeSocket
@@ -65,7 +69,7 @@ def _last_fragment(iri: str) -> str:
     return s[1] if len(s) == 2 else iri
 
 def _nice_label(g, node):
-    # ensure namespaces locally (evita NameError)
+    # ensure namespaces locally (avoid NameError)
     _rdflib, RDF, RDFS, OWL, SKOS = _import_rdflib()
     for p in (RDFS.label, SKOS.prefLabel):
         for o in g.objects(node, p):
@@ -168,13 +172,13 @@ def dynamic_property_items(self, context):
         items += [(c, l, "") for c,l,_ in CRM_PROPERTIES]
     return items
 
-# <-- aggiungo questo provider dinamico per i namespace
+# <-- add this dynamic provider for namespaces
 def dynamic_namespace_items(self, context):
-    # sempre includo un'opzione vuota come prima voce così il default "" è sempre valido
+    # always include an empty option as the first item so the default "" remains valid
     items = [("", "(none)", "")]
     items += [(k, k, "") for k in STORE.namespaces()]
     if len(items) == 1:
-        # fallback ai namespace demo se non ci sono ontologie importate
+        # fallback to demo namespaces when no ontologies have been imported
         items += [('crm','CIDOC CRM',''),('cra','CRMarchaeo',''),('crmsci','CRMsci','')]
     return items
 
@@ -297,12 +301,12 @@ _ensure_scene_props()
 # Sockets
 # -------------------------
 class CIDOCInSocket(NodeSocket):
-    bl_idname = "CIDOCInSocket"; bl_label = "CIDOC In"
+    bl_idname = "CIDOCInSocket"; bl_label = "In"
     def draw(self, ctx, layout, node, text): layout.label(text=text) if text else None
     def draw_color(self, ctx, node): return (0.20, 0.60, 1.00, 1.0)
 
 class CIDOCOutSocket(NodeSocket):
-    bl_idname = "CIDOCOutSocket"; bl_label = "CIDOC Out"
+    bl_idname = "CIDOCOutSocket"; bl_label = "Out"
     def draw(self, ctx, layout, node, text): layout.label(text=text) if text else None
     def draw_color(self, ctx, node): return (0.20, 0.60, 1.00, 1.0)
 
@@ -332,10 +336,13 @@ class CIDOCEntityNode(Node):
 
     title: bpy.props.StringProperty(name="Title", default="", update=_on_title)
     iri: bpy.props.StringProperty(name="IRI", default="")
-    # sostituisco l'EnumProperty statico con il provider dinamico
+    # replace the static EnumProperty with the dynamic provider
     namespace: bpy.props.StringProperty(name="Namespace", default="")
-    class_code: bpy.props.EnumProperty(name="Class", items=dynamic_class_items,
-        description="Classi importate (o demo se vuoto)")
+    class_code: bpy.props.EnumProperty(
+        name="Class",
+        items=dynamic_class_items,
+        description="Imported classes (or demo list if none loaded)"
+    )
     class_custom: bpy.props.StringProperty(name="Custom Class", default="")
     is_valid: bpy.props.BoolProperty(name="Valid", default=True)
 
@@ -399,12 +406,12 @@ class CIDOCPropertyNode(Node):
             for s in rm: side.remove(s)
         _do(self.inputs); _do(self.outputs)
 
-    # sostituisco l'EnumProperty statico con il provider dinamico
+    # replace the static EnumProperty with the dynamic provider
     namespace: bpy.props.StringProperty(name="Namespace", default="")
 
     def _on_prop_change(self, ctx): self.label = self.effective_property or self.bl_label
     prop_code: bpy.props.EnumProperty(name="Property", items=dynamic_property_items,
-        description="Proprietà importate (o demo)", update=_on_prop_change)
+        description="Imported properties (or demo)", update=_on_prop_change)
     prop_custom: bpy.props.StringProperty(name="Custom Property", default="", update=_on_prop_change)
 
     def init(self, ctx):
@@ -420,7 +427,7 @@ class CIDOCPropertyNode(Node):
         layout.prop(self, "prop_code", text="Property")
         if self.prop_code == "__custom__": layout.prop(self, "prop_custom", text="Custom")
         layout.prop(self, "namespace", text="Namespace")
-                # Se presente un IRI (salvato nei custom props), mostra un pulsante per aprirlo
+                # If the node has an IRI property, show it with "open" button
         iri_val = self.get("iri", "")
         if iri_val:
             row_iri = layout.row(align=True)
@@ -464,7 +471,7 @@ class CIDOCPropertyNode(Node):
         op2 = row.operator("onto3d.node_isolate_geometry", text="Isolate geometry", icon='HIDE_OFF')
         op2.node_uuid = nid
 
-        # --- Item panel: mostra i metadati non-editabili e pulsante "Zoom to node"
+        # --- Item panel: show non-editable metadata and "Zoom to node" button
         box = layout.box()
         box.label(text="Node metadata", icon='INFO')
         box.label(text=f"Title: {self.label or self.bl_label}")
@@ -513,7 +520,7 @@ class CIDOC_PT_OntologiesPanel(bpy.types.Panel):
         # reload button removed
 
         if not STORE.data:
-            col.label(text="Nessuna ontologia caricata.")
+            col.label(text="No ontologies loaded.")
             return
 
         col.label(text="Loaded namespaces:")
@@ -530,7 +537,7 @@ class CIDOC_PT_OntologiesPanel(bpy.types.Panel):
         layout.separator()
         box = layout.box()
         box.label(text="Select Imported Ontology")
-        # rimosso il filtro e il controllo max: Generate caricherà tutte le entità/proprietà selezionate
+        # removed the filter and max limit: Generate will load all selected entities/properties
         box.prop(sc, "cidoc_ns_enum", text="Namespaces")
         rowb = box.row(align=True)
         rowb.operator("cidoc.generate_presets", icon='PLUS')
@@ -541,12 +548,12 @@ class CIDOC_OT_ExportNamespace(bpy.types.Operator):
     ns_key: bpy.props.StringProperty()
     def execute(self, context):
         if self.ns_key not in STORE.data:
-            self.report({'ERROR'}, "Namespace non trovato"); return {'CANCELLED'}
+            self.report({'ERROR'}, "Namespace not found"); return {'CANCELLED'}
         outdir = bpy.path.abspath("//ontologies_cache"); os.makedirs(outdir, exist_ok=True)
         path = os.path.join(outdir, f"{self.ns_key}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(STORE.data[self.ns_key], f, ensure_ascii=False, indent=2)
-        self.report({'INFO'}, f"Esportato: {path}"); return {'FINISHED'}
+        self.report({'INFO'}, f"Exported: {path}"); return {'FINISHED'}
 
 class CIDOC_OT_RemoveNamespace(bpy.types.Operator):
     bl_idname = "cidoc.remove_namespace"; bl_label = "Remove Namespace"
@@ -554,14 +561,14 @@ class CIDOC_OT_RemoveNamespace(bpy.types.Operator):
     def execute(self, context):
         if self.ns_key in STORE.data:
             del STORE.data[self.ns_key]; rebuild_node_categories_with_presets([], [])
-            self.report({'INFO'}, f"Rimosso namespace '{self.ns_key}'")
+            self.report({'INFO'}, f"Namespace removed:'{self.ns_key}'")
         else:
-            self.report({'WARNING'}, "Namespace non trovato")
+            self.report({'WARNING'}, "Namespace not found")
         return {'FINISHED'}
 
 class CIDOC_OT_ImportOntology(bpy.types.Operator):
     bl_idname = "cidoc.import_ontology"; bl_label = "Import RDFS/RDF/OWL"
-    bl_description = "Importa ontologia da file locale e popola lo store"
+    bl_description = "Import ontology from local file and populate the store"
     filter_glob: bpy.props.StringProperty(default="*.rdf;*.rdfs;*.owl;*.ttl;*.xml", options={'HIDDEN'})
     filepath: bpy.props.StringProperty(subtype='FILE_PATH')
     ns_hint: bpy.props.StringProperty(name="Namespace key (opzionale)", default="")
@@ -582,10 +589,11 @@ class CIDOC_OT_ImportOntology(bpy.types.Operator):
 
 class CIDOC_OT_GeneratePresets(bpy.types.Operator):
     bl_idname = "cidoc.generate_presets"; bl_label = "Add Nodes"
+    bl_description = "Generate presets for the selected namespaces"
     def execute(self, context):
         sc = context.scene
         selected_ns = tuple(sc.cidoc_ns_enum) if sc.cidoc_ns_enum else None
-        # calcolo il numero totale di entità/proprietà per i namespace selezionati (o tutti)
+        # compute the total number of entities/properties for the selected namespaces (or all)
         if selected_ns:
             total_ents = sum(len(STORE.data[ns]['classes']) for ns in selected_ns if ns in STORE.data)
             total_props = sum(len(STORE.data[ns]['properties']) for ns in selected_ns if ns in STORE.data)
@@ -595,9 +603,9 @@ class CIDOC_OT_GeneratePresets(bpy.types.Operator):
         limit = max(total_ents, total_props, 0)
         if limit == 0:
             rebuild_node_categories_with_presets([], [])
-            self.report({'INFO'}, "Nessuna entità/proprietà trovata per i namespace selezionati.")
+            self.report({'INFO'}, "No entities/properties found for the selected namespaces.")
             return {'FINISHED'}
-        # genero tutti gli items senza filtro
+        # generate all items without filtering
         ents, props = build_preset_items(
             filter_text="",
             namespaces=selected_ns,
@@ -609,13 +617,14 @@ class CIDOC_OT_GeneratePresets(bpy.types.Operator):
 
 class CIDOC_OT_ClearPresets(bpy.types.Operator):
     bl_idname = "cidoc.clear_presets"; bl_label = "Clear Nodes"
+    bl_description = "Clear all Add-menu presets"
     def execute(self, context):
         rebuild_node_categories_with_presets([], [])
         self.report({'INFO'}, "Cleared CIDOC Add-menu presets.")
         return {'FINISHED'}
 
 class CIDOC_OT_ReloadAddon(bpy.types.Operator):
-    """Ricarica l'add-on Onto3D da file"""
+    """Reload the Onto3D addon from disk (for development purposes)."""
     bl_idname = "cidoc.reload_addon"
     bl_label = "Reload Onto3D Addon"
 
@@ -632,7 +641,7 @@ class CIDOC_OT_ReloadAddon(bpy.types.Operator):
 # ================================
 # Onto3D – Connect Geometry Panel
 # ================================
-# (inserito per collegare nodi <-> geometrie nella scena)
+# connect nodes and geometry in the schene
 GEOM_TYPES = {
     'MESH','CURVE','SURFACE','META','FONT','VOLUME','GPENCIL','POINTCLOUD','CURVES'
 }
@@ -720,17 +729,17 @@ class ONTO3D_OT_CreateConnection(bpy.types.Operator):
             return {'CANCELLED'}
         geoms = _gather_selected_geometry(context)
         if not geoms:
-            self.report({'ERROR'}, "Seleziona una o più geometrie (o un Empty con geometrie figlie).")
+            self.report({'ERROR'}, "Select one or more geometries (or an Empty with child geometries).")
             return {'CANCELLED'}
         created = 0
         for g in geoms:
             _node_add_link(node, g)
             created += 1
-        self.report({'INFO'}, f"Collegate {created} geometrie al nodo “{node.name}”.")
+        self.report({'INFO'}, f"{node.name} connected to {created}”.")
         return {'FINISHED'}
     
 class ONTO3D_OT_OpenIRI(bpy.types.Operator):
-    """Apre l'IRI nel browser predefinito (nuova scheda)."""
+    """Open the IRI in the default browser (new tab)."""
     bl_idname = "onto3d.open_iri"
     bl_label = "Open in Web Browser"
 
@@ -743,15 +752,15 @@ class ONTO3D_OT_OpenIRI(bpy.types.Operator):
             return {'CANCELLED'}
         try:
             import re, webbrowser
-            # Se manca lo schema, prova ad aggiungere https:// per i casi tipo 'www.example.org'
+            # If the URL scheme is missing, try prepending "https://" for cases like 'www.example.org'
             if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', url):
                 if url.startswith("www."):
                     url = "https://" + url
             webbrowser.open_new_tab(url)
-            self.report({'INFO'}, "Aperto nel browser predefinito.")
+            self.report({'INFO'}, "Opened in default browser.")
             return {'FINISHED'}
         except Exception as e:
-            self.report({'ERROR'}, f"Impossibile aprire l'IRI: {e}")
+            self.report({'ERROR'}, f"Unable to open IRI: {e}")
             return {'CANCELLED'}
 
 
@@ -787,13 +796,13 @@ class ONTO3D_OT_BreakConnection(bpy.types.Operator):
                 if "onto3d_uuid" in node and "onto3d_linked_nodes" in g and node["onto3d_uuid"] in g["onto3d_linked_nodes"]:
                     _node_remove_link(node, g)
                     removed += 1
-            self.report({'INFO'}, f"Scollegate {removed} geometrie dal nodo “{node.name}”.")
+            self.report({'INFO'}, f"Disconnected {removed} geometries from node “{node.name}”.")
             return {'FINISHED'}
         if self.remove_all:
             n = _remove_all_links_for_node(node)
-            self.report({'INFO'}, f"Rimossi {n} collegamenti dal nodo “{node.name}”.")
+            self.report({'INFO'}, f"Removed {n} connections from node “{node.name}”.")
             return {'FINISHED'}
-        self.report({'INFO'}, "Nessuna geometria selezionata. Nessuna azione eseguita.")
+        self.report({'INFO'}, "No geometry selected. No action taken.")
         return {'CANCELLED'}
 
 class ONTO3D_OT_UpdateConnections(bpy.types.Operator):
@@ -805,11 +814,11 @@ class ONTO3D_OT_UpdateConnections(bpy.types.Operator):
     def execute(self, context):
         node = _find_active_node(context)
         if not node:
-            self.report({'ERROR'}, "Nessun nodo attivo trovato in un Node Editor aperto.")
+            self.report({'ERROR'}, "No active node found in an open Node Editor.")
             return {'CANCELLED'}
         nid = node.get("onto3d_uuid") or _ensure_node_uuid(node)
 
-        # ricostruisco la lista degli oggetti che effettivamente referenziano questo node_uuid
+        # rebuild the list of objects that actually reference this node_uuid
         objs_with_ref = [o for o in bpy.data.objects if nid in o.get("onto3d_linked_nodes", [])]
         new_links = sorted(o.name for o in objs_with_ref)
         old_links = list(node.get("onto3d_linked_objects", []))
@@ -819,7 +828,7 @@ class ONTO3D_OT_UpdateConnections(bpy.types.Operator):
 
         node["onto3d_linked_objects"] = new_links
 
-        # sincronizzo lato oggetti: aggiungo/rimuovo nid dove necessario
+        # sync object side: add/remove nid where needed
         for o in bpy.data.objects:
             lst = list(o.get("onto3d_linked_nodes", []))
             if o.name in new_links:
@@ -857,7 +866,7 @@ def _activate_node_and_view(node):
         def op():
             sp = area.spaces.active
             try:
-                # assicura il tree giusto
+                # Ensure the correct tree is set
                 sp.tree_type = "CIDOCGraphTreeType"
                 sp.node_tree = node.id_data
             except Exception:
@@ -883,7 +892,7 @@ def _activate_node_and_view(node):
 def _select_objects_in_view(objs, make_active=True):
     names = {o.name for o in objs if o}
     if not names: return False
-    # reset selezione
+    # reset selection
     for o in bpy.context.view_layer.objects:
         o.select_set(False)
     active_obj = None
@@ -939,7 +948,7 @@ def _node_to_linked_objects(node):
 
 def _handle_view_to_graph_sync(scene):
     global _last_sel_uuids, _last_active_node_uuid
-    # 1) Selezione geometrie → attiva nodo collegato
+    # 1) Geometry selection → activate linked node
     sel_objs = [o for o in bpy.context.selected_objects]
     current_uuids = _objects_to_node_uuid_set(sel_objs)
     if current_uuids and current_uuids != _last_sel_uuids:
@@ -948,7 +957,7 @@ def _handle_view_to_graph_sync(scene):
         _last_active_node_uuid = target_uuid if node else None
         _last_sel_uuids = current_uuids
 
-    # 2) Nodo attivo → seleziona geometrie collegate
+    # 2) Active node → select linked geometries
     node = _find_active_node(bpy.context)
     if node:
         nid = node.get("onto3d_uuid")
@@ -959,7 +968,7 @@ def _handle_view_to_graph_sync(scene):
             _last_active_node_uuid = nid
 
 class ONTO3D_OT_ToggleSyncViews(bpy.types.Operator):
-    """Attiva/Disattiva la sincronizzazione tra Viewport e Grafo."""
+    """Toggle synchronization between Viewport and Graph."""
     bl_idname = "onto3d.toggle_sync_views"
     bl_label = "Sync views"
 
@@ -990,7 +999,7 @@ class ONTO3D_OT_ToggleSyncViews(bpy.types.Operator):
         return {'FINISHED'}
 
 class ONTO3D_OT_NodeZoomNode(bpy.types.Operator):
-    """Seleziona il nodo nel Node Editor e centra la vista (node.view_selected)."""
+    """Select the node in the Node Editor and center the view (node.view_selected)."""
     bl_idname = "onto3d.node_zoom_node"
     bl_label = "Zoom to node"
 
@@ -999,18 +1008,18 @@ class ONTO3D_OT_NodeZoomNode(bpy.types.Operator):
     def execute(self, context):
         n = _find_node_by_uuid(self.node_uuid)
         if not n:
-            self.report({'WARNING'}, "Nodo non trovato.")
+            self.report({'WARNING'}, "Node not found.")
             return {'CANCELLED'}
         ok = _activate_node_and_view(n)
         if ok:
-            self.report({'INFO'}, "Nodo selezionato e centrato nell'Editor di Nodi.")
+            self.report({'INFO'}, "Node selected and centered in the Node Editor.")
             return {'FINISHED'}
         else:
-            self.report({'WARNING'}, "Impossibile attivare il Node Editor o centrare il nodo.")
+            self.report({'WARNING'}, "Unable to activate the Node Editor or center the node.")
             return {'CANCELLED'}
 
 class ONTO3D_OT_NodeZoomGeometry(bpy.types.Operator):
-    """Esegue il frame sulla/e geometria/e collegate al nodo."""
+    """Frame the geometry/ies linked to the node."""
     bl_idname = "onto3d.node_zoom_geometry"
     bl_label = "Zoom to geometry"
 
@@ -1041,7 +1050,7 @@ class ONTO3D_OT_NodeZoomGeometry(bpy.types.Operator):
         return {'FINISHED'}
 
 class ONTO3D_OT_NodeIsolateGeometry(bpy.types.Operator):
-    """Isola (Local View) la/e geometria/e collegate al nodo (toggle)."""
+    """Isolate (Local View) the geometry/ies linked to the node (toggle)."""
     bl_idname = "onto3d.node_isolate_geometry"
     bl_label = "Isolate geometry"
 
@@ -1050,11 +1059,11 @@ class ONTO3D_OT_NodeIsolateGeometry(bpy.types.Operator):
     def execute(self, context):
         node = _find_node_by_uuid(self.node_uuid)
         if not node:
-            self.report({'WARNING'}, "Nodo non trovato.")
+            self.report({'WARNING'}, "Node not found")
             return {'CANCELLED'}
         objs = _node_to_linked_objects(node)
         if not objs:
-            self.report({'INFO'}, "Nessuna geometria collegata.")
+            self.report({'INFO'}, "No geometry connected.")
             return {'CANCELLED'}
 
         _select_objects_in_view(objs, make_active=True)
@@ -1070,11 +1079,11 @@ class ONTO3D_OT_NodeIsolateGeometry(bpy.types.Operator):
             did = _run_in_area(area, op) or did
 
         if did:
-            self.report({'INFO'}, "Local View attivata/disattivata sulle geometrie collegate.")
+            self.report({'INFO'}, "Local View toggled on/off for linked geometries.")
         return {'FINISHED'}
 
 class ONTO3D_PT_ConnectGeometry(bpy.types.Panel):
-    """Sezione N-panel per la gestione dei link nodo ↔ geometrie."""
+    """N-panel section for managing node ↔ geometry links."""
     bl_label = "Connect geometry"
     bl_idname = "ONTO3D_PT_ConnectGeometry"
     bl_space_type = 'NODE_EDITOR'
@@ -1097,7 +1106,7 @@ class ONTO3D_PT_ConnectGeometry(bpy.types.Panel):
                 if len(linked) > 5:
                     col.label(text=f"... (+{len(linked)-5})")
         else:
-            layout.label(text="Nessun nodo attivo trovato.", icon='INFO')
+            layout.label(text="No active node found.", icon='INFO')
         row = layout.row(align=True)
         row.operator("onto3d.create_connection", icon='LINKED')
         row.operator("onto3d.break_connection", icon='UNLINKED')
@@ -1106,14 +1115,14 @@ class ONTO3D_PT_ConnectGeometry(bpy.types.Panel):
         # removed Sync views UI from Node Editor panel as requested
 
         col = layout.column(align=True)
-        col.label(text="Uso:", icon='QUESTION')
-        col.label(text="1) Seleziona geometrie nel 3D View (Empty ammessi).")
-        col.label(text="2) Attiva un nodo nell'Editor di Nodi.")
-        col.label(text="3) Premi Create o Break.")
+        col.label(text="Usage:", icon='QUESTION')
+        col.label(text="1) Select geometries in the 3D View (Empties allowed).")
+        col.label(text="2) Activate a node in the Node Editor.")
+        col.label(text="3) Press Create or Break.")
 
 # --- rimpiazza la classe ONTO3D_PT_ViewportPanel con il nuovo pannello sotto "Item" ---
 class ONTO3D_PT_ItemProperties(bpy.types.Panel):
-    """Item N-panel: mostra i metadati del nodo collegato all'oggetto selezionato."""
+    """Item N-panel: shows metadata of the node linked to the selected object."""
     bl_label = "Onto3D Properties"
     bl_idname = "ONTO3D_PT_ItemProperties"
     bl_space_type = 'VIEW_3D'
@@ -1124,23 +1133,23 @@ class ONTO3D_PT_ItemProperties(bpy.types.Panel):
         layout = self.layout
         obj = context.active_object
         if not obj:
-            layout.label(text="Nessun oggetto selezionato.")
+            layout.label(text="No active object.")
             return
 
         linked = obj.get("onto3d_linked_nodes", [])
         if not linked:
-            layout.label(text="Nessun nodo collegato all'oggetto selezionato.")
+            layout.label(text="No node linked to the selected object.")
             return
 
         nid = linked[0]
         node = _find_node_by_uuid(nid)
         if not node:
-            layout.label(text="Nodo collegato non trovato.")
+            layout.label(text="Linked node not found.")
             return
 
         box = layout.box()
         if len(linked) > 1:
-            box.label(text=f"{len(linked)} nodi collegati", icon='NODE')
+            box.label(text=f"{len(linked)} linked nodes", icon='NODE')
 
         title = getattr(node, "title", "") or getattr(node, "label", "") or "(none)"
         cls = getattr(node, "effective_class", None) or getattr(node, "effective_property", None) or "(none)"
@@ -1150,7 +1159,7 @@ class ONTO3D_PT_ItemProperties(bpy.types.Panel):
         box.label(text=f"Title: {title}")
         box.label(text=f"Class/Property: {cls}")
         box.label(text=f"Namespace: {ns}")
-        # IRI nel pannello Item + pulsante "open"
+        # IRI in the Item panel + "open" button
         if iri and iri != "(none)":
             row_iri = box.row(align=True)
             row_iri.label(text=f"IRI: {iri}")
@@ -1163,7 +1172,7 @@ class ONTO3D_PT_ItemProperties(bpy.types.Panel):
         op = row.operator("onto3d.node_zoom_node", text="Zoom to node", icon='VIEWZOOM')
         op.node_uuid = nid
 
-# Registration: assicurati che tutte le classi siano qui (aggiungi/rimuovi nomi se necessario)
+# Registration: make sure all classes are listed here (add/remove names as needed)
 classes = (
     CIDOCInSocket, CIDOCOutSocket, CIDOCGraphTree,
     CIDOCEntityNode, CIDOCPropertyNode,
@@ -1178,7 +1187,7 @@ classes = (
     ONTO3D_OT_NodeIsolateGeometry,
     ONTO3D_OT_NodeZoomNode,
     ONTO3D_PT_ItemProperties,
-    ONTO3D_OT_OpenIRI,  # nuovo pannello nel tab Item
+    ONTO3D_OT_OpenIRI,
 )
 
 def register():
@@ -1191,7 +1200,7 @@ def register():
     rebuild_node_categories_with_presets([], [])
 
 def unregister():
-    # rimuovi handler sync se attivo
+    # remove sync handler if active
     global _SYNC_HANDLER
     try:
         if _SYNC_HANDLER and _SYNC_HANDLER in bpy.app.handlers.depsgraph_update_post:
@@ -1208,10 +1217,10 @@ def unregister():
 
 if __name__ == "__main__":
     register()
-    # crea un esempio visibile nel menu "New" del Node Editor (solo se non esiste già)
+    # create a sample visible in the "New" menu of the Node Editor (only if it doesn't already exist)
     if "Onto3D Graph 1" not in bpy.data.node_groups:
         tree = bpy.data.node_groups.new("Onto3D Graph 1", "CIDOCGraphTreeType")
-        # opzionale: aggiunge il tree all'area Node Editor corrente (se aperta)
+        # optional: add the tree to the current Node Editor area (if open)
         for area in __onto3d_tag_node_editors() or []:
             if area.type == "NODE_EDITOR":
                 for space in area.spaces:

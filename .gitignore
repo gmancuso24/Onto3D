@@ -32,4 +32,4 @@ build/
 .DS_Store
 ._*
 Thumbs.db
-desktop.ini
+desktop.ini.DS_Store
