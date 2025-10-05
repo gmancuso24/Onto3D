@@ -131,10 +131,10 @@ class Onto3DNodeProperty(Node):
         except Exception:
             pass
 
-    # Campo "Label" che sincronizza la scritta in alto del nodo
+    # "Label" field that synchronizes the text shown at the top of the node
     prop_label: StringProperty(
         name="Label",
-        description="Testo mostrato come etichetta del nodo",
+        description="Text shown as node title (overrides automatic label)",
         default="",
         update=_on_prop_label_update
     )

@@ -579,7 +579,7 @@ class ONTO3D_PT_ConnectGeometry(Panel):
 
 
 class ONTO3D_OT_FrameLinkedNode(Operator):
-    """Frame (.) the Node linked to the active selected object"""
+    """Frame the Node linked to the active selected object"""
     bl_idname = "onto3d.frame_linked_node"
     bl_label = "Frame Linked Node"
     bl_options = {'REGISTER'}

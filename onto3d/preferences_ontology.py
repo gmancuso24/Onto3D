@@ -26,7 +26,7 @@ def _parse_ttl_or_owl_any(path_or_url: str, is_url: bool = False):
         import rdflib
         from rdflib.namespace import RDF, RDFS, OWL, SKOS
     except Exception as e:
-        raise RuntimeError("rdflib non è installato o non è disponibile nell'ambiente di Blender") from e
+        raise RuntimeError("rdflib is not installed or not available in Blender's environment") from e
 
     g = rdflib.Graph()
     # rdflib capisce da solo il formato nella maggior parte dei casi; lasciamo a lui il detection.
@@ -263,7 +263,7 @@ def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
         elif item.source_type == 'URL':
             url = (item.path or "").strip()
             if not url:
-                raise ValueError("URL vuoto")
+                raise ValueError("Empty URL")
             lower = url.lower()
             if lower.endswith((".json", ".jsonld")):
                 # scarica JSON e parse semplice
