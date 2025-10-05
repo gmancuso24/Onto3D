@@ -31,7 +31,7 @@ def __onto3d_tag_node_editors():
 bl_info = {
     "name": "Onto3D",
     "author": "Giacomo Mancuso & ChatGPT",
-    "version": (0, 5, 0),
+    "version": (0, 5, 1),
     "blender": (4, 5, 2),
     "location": "Node Editor > N-Panel (Onto3D)",
     "description": "Manage and create an ontological graph in Blender's node editor and connect it to geometry data.",
@@ -667,7 +667,7 @@ def execute(self, context):
         self.report({'INFO'}, f"Import: '{ns}' "
                               f"({len(STORE.data[ns]['classes'])} classes, {len(STORE.data[ns]['properties'])} properties)")
     except Exception as e:
-        self.report({'ERROR'}, f"Import fallito: {e}"); return {'CANCELLED'}
+        self.report({'ERROR'}, f"Import failed: {e}"); return {'CANCELLED'}
     return {'FINISHED'}
 def invoke(self, context, event):
     context.window_manager.fileselect_add(self); return {'RUNNING_MODAL'}
@@ -710,7 +710,7 @@ def execute(self, context):
         importlib.reload(sys.modules[addon_name])
     else:
         importlib.import_module(addon_name)
-    self.report({'INFO'}, "Onto3D ricaricato")
+    self.report({'INFO'}, "Onto3D reloaded")
     return {'FINISHED'}
 
 # ================================
@@ -810,7 +810,7 @@ def execute(self, context):
 def execute(self, context):
     url = (self.iri or "").strip()
     if not url:
-        self.report({'ERROR'}, "IRI mancante.")
+        self.report({'ERROR'}, "IRI missing.")
         return {'CANCELLED'}
     try:
         import re, webbrowser
@@ -1052,11 +1052,11 @@ def execute(self, context):
 def execute(self, context):
         node = _find_node_by_uuid(self.node_uuid)
         if not node:
-            self.report({'WARNING'}, "Nodo non trovato.")
+            self.report({'WARNING'}, "Node not found.")
             return {'CANCELLED'}
         objs = _node_to_linked_objects(node)
         if not objs:
-            self.report({'INFO'}, "Nessuna geometria collegata.")
+            self.report({'INFO'}, "No geometry connected.")
             return {'CANCELLED'}
 
         _select_objects_in_view(objs, make_active=True)
@@ -1070,7 +1070,7 @@ def execute(self, context):
                 return True
             did = _run_in_area(area, op) or did
         if did:
-            self.report({'INFO'}, "Inquadrata la geometria collegata.")
+            self.report({'INFO'}, "Frames the linked geometry.")
         return {'FINISHED'}
 
 def execute(self, context):
