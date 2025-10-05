@@ -1,3 +1,4 @@
+from . import preferences_ontology
 #------------------------------------------------------------
 # ONTO3D
 #------------------------------------------------------------
@@ -30,7 +31,7 @@ def __onto3d_tag_node_editors():
 bl_info = {
     "name": "Onto3D",
     "author": "Giacomo Mancuso & ChatGPT",
-    "version": (0, 4, 4),
+    "version": (0, 5, 0),
     "blender": (4, 5, 2),
     "location": "Node Editor > N-Panel (Onto3D)",
     "description": "Manage and create an ontological graph in Blender's node editor and connect it to geometry data.",
@@ -46,7 +47,56 @@ from nodeitems_utils import NodeCategory, NodeItem, register_node_categories, un
 import os, json, ast
 from collections import defaultdict
 import uuid
+from importlib import import_module
 
+# connects to ui_panels.py
+from . import ui_panels
+from . import nodes
+
+def register():
+    from . import nodes, ui_panels, preferences_ontology
+    if hasattr(nodes, 'register'): nodes.register()
+    if hasattr(ui_panels, 'register'): ui_panels.register()
+    if hasattr(preferences_ontology, 'register'): preferences_ontology.register()
+
+def unregister():
+    # Delegate unregister in reverse order to ensure teardown happens cleanly
+    try:
+        from . import preferences_ontology
+    except Exception:
+        preferences_ontology = None
+    try:
+        from . import ui_panels
+    except Exception:
+        ui_panels = None
+    try:
+        from . import nodes
+    except Exception:
+        nodes = None
+
+    if preferences_ontology is not None and hasattr(preferences_ontology, "unregister"):
+        try:
+            preferences_ontology.unregister()
+        except Exception:
+            pass
+
+    if ui_panels is not None and hasattr(ui_panels, "unregister"):
+        try:
+            ui_panels.unregister()
+        except Exception:
+            pass
+
+    if nodes is not None and hasattr(nodes, "unregister"):
+        try:
+            nodes.unregister()
+        except Exception:
+            pass
+
+# try to import local nodes module early — tolerate absence
+try:
+    from . import nodes
+except Exception:
+    nodes = None
 
 # -------------------------
 # Lazy import rdflib (works even if installed after)
@@ -527,171 +577,141 @@ node_categories = [
 # -------------------------
 # UI Panel & Operators
 # -------------------------
-class ONTO3D_PT_OntologiesPanel(bpy.types.Panel):
-    bl_idname = "ONTO3D_PT_OntologiesPanel"
-    bl_label = "Import Ontologies"
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Onto3D"
+def draw(self, context):
+    layout = self.layout
+    sc = context.scene
 
-    def draw(self, context):
-        layout = self.layout
-        sc = context.scene
+    col = layout.column(align=True)
+    col.operator("onto3d.import_ontology", icon='IMPORT')
+    # reload button removed
 
-        col = layout.column(align=True)
-        col.operator("onto3d.import_ontology", icon='IMPORT')
-        # reload button removed
+    if not STORE.data:
+        col.label(text="No ontologies loaded.")
+        return
 
-        if not STORE.data:
-            col.label(text="No ontologies loaded.")
-            return
+    col.label(text="Loaded namespaces:")
+    for ns_key, blob in STORE.data.items():
+        box = col.box()
+        box.label(text=f"{ns_key}  (base: {blob.get('base','')})")
+        row = box.row(align=True)
+        row.label(text=f"Classes: {len(blob['classes'])}")
+        row.label(text=f"Properties: {len(blob['properties'])}")
+        row2 = box.row(align=True)
+        row2.operator("onto3d.export_namespace", text="Export JSON").ns_key = ns_key
+        row2.operator("onto3d.remove_namespace", text="Remove").ns_key = ns_key
 
-        col.label(text="Loaded namespaces:")
-        for ns_key, blob in STORE.data.items():
-            box = col.box()
-            box.label(text=f"{ns_key}  (base: {blob.get('base','')})")
-            row = box.row(align=True)
-            row.label(text=f"Classes: {len(blob['classes'])}")
-            row.label(text=f"Properties: {len(blob['properties'])}")
-            row2 = box.row(align=True)
-            row2.operator("onto3d.export_namespace", text="Export JSON").ns_key = ns_key
-            row2.operator("onto3d.remove_namespace", text="Remove").ns_key = ns_key
+    layout.separator()
+    box = layout.box()
+    box.label(text="Select Imported Ontology")
+    # removed the filter and max limit: Generate will load all selected entities/properties
+    box.prop(sc, "onto3d_ns_enum", text="Namespaces")
+    rowb = box.row(align=True)
+    rowb.operator("onto3d.generate_presets", icon='PLUS')
+    rowb.operator("onto3d.clear_presets", icon='TRASH')
 
-        layout.separator()
-        box = layout.box()
-        box.label(text="Select Imported Ontology")
-        # removed the filter and max limit: Generate will load all selected entities/properties
-        box.prop(sc, "onto3d_ns_enum", text="Namespaces")
-        rowb = box.row(align=True)
-        rowb.operator("onto3d.generate_presets", icon='PLUS')
-        rowb.operator("onto3d.clear_presets", icon='TRASH')
+def execute(self, context):
+    if self.ns_key not in STORE.data:
+        self.report({'ERROR'}, "Namespace not found"); return {'CANCELLED'}
+    outdir = bpy.path.abspath("//ontologies_cache"); os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, f"{self.ns_key}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(STORE.data[self.ns_key], f, ensure_ascii=False, indent=2)
+    self.report({'INFO'}, f"Exported: {path}"); return {'FINISHED'}
 
-class ONTO3D_OT_ExportNamespace(bpy.types.Operator):
-    bl_idname = "onto3d.export_namespace"; bl_label = "Export Namespace JSON"
-    ns_key: bpy.props.StringProperty()
-    def execute(self, context):
-        if self.ns_key not in STORE.data:
-            self.report({'ERROR'}, "Namespace not found"); return {'CANCELLED'}
-        outdir = bpy.path.abspath("//ontologies_cache"); os.makedirs(outdir, exist_ok=True)
-        path = os.path.join(outdir, f"{self.ns_key}.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(STORE.data[self.ns_key], f, ensure_ascii=False, indent=2)
-        self.report({'INFO'}, f"Exported: {path}"); return {'FINISHED'}
-
-class ONTO3D_OT_RemoveNamespace(bpy.types.Operator):
-    bl_idname = "onto3d.remove_namespace"; bl_label = "Remove Namespace"
-    ns_key: bpy.props.StringProperty()
-    def execute(self, context):
-        if self.ns_key in STORE.data:
-            del STORE.data[self.ns_key]
-            # also remove any stored presets for that namespace
-            try:
-                _PRESET_MAP.pop(self.ns_key, None)
-            except Exception:
-                pass
-            # rebuild presets for the remaining namespaces (keep others)
-            # recompute merged lists from _PRESET_MAP (fall back to building from STORE)
-            all_ents = []
-            all_props = []
-            if _PRESET_MAP:
-                for e,p in _PRESET_MAP.values():
-                    all_ents = _merge_nodeitem_lists(all_ents, e)
-                    all_props = _merge_nodeitem_lists(all_props, p)
-            else:
-                # fallback: build fresh from STORE
-                remaining = tuple(STORE.namespaces()) if STORE.namespaces() else None
-                total_ents = sum(len(STORE.data[ns]['classes']) for ns in STORE.data) if STORE.data else 0
-                total_props = sum(len(STORE.data[ns]['properties']) for ns in STORE.data) if STORE.data else 0
-                if total_ents == 0 and total_props == 0:
-                    all_ents, all_props = [], []
-                else:
-                    all_ents, all_props = build_preset_items(filter_text="", namespaces=remaining, limit_per_kind=max(total_ents, total_props, 0))
-            rebuild_node_categories_with_presets(all_ents, all_props)
-            self.report({'INFO'}, f"Namespace removed:'{self.ns_key}'")
-        else:
-            self.report({'WARNING'}, "Namespace not found")
-        return {'FINISHED'}
-
-class ONTO3D_OT_ImportOntology(bpy.types.Operator):
-    bl_idname = "onto3d.import_ontology"; bl_label = "Import RDFS/RDF/OWL"
-    bl_description = "Import ontology from local file and populate the store"
-    filter_glob: bpy.props.StringProperty(default="*.rdf;*.rdfs;*.owl;*.ttl;*.xml", options={'HIDDEN'})
-    filepath: bpy.props.StringProperty(subtype='FILE_PATH')
-    ns_hint: bpy.props.StringProperty(name="Namespace key (opzionale)", default="")
-    def execute(self, context):
+def execute(self, context):
+    if self.ns_key in STORE.data:
+        del STORE.data[self.ns_key]
+        # also remove any stored presets for that namespace
         try:
-            ns = import_rdf_to_store(self.filepath, self.ns_hint or None)
-            rebuild_dynamic_enums_and_menus()
-            # generate Add-menu presets automatically for the newly imported namespace
-            ents, props = build_preset_items(filter_text="", namespaces=(ns,), limit_per_kind=200)
-            # store presets per-namespace and rebuild the global merged menu
-            global _DYNAMIC_ENTITY_ITEMS, _DYNAMIC_PROPERTY_ITEMS, _PRESET_MAP
-            _PRESET_MAP[ns] = (ents, props)
-            merged_ents = []
-            merged_props = []
+            _PRESET_MAP.pop(self.ns_key, None)
+        except Exception:
+            pass
+        # rebuild presets for the remaining namespaces (keep others)
+        # recompute merged lists from _PRESET_MAP (fall back to building from STORE)
+        all_ents = []
+        all_props = []
+        if _PRESET_MAP:
             for e,p in _PRESET_MAP.values():
-                merged_ents = _merge_nodeitem_lists(merged_ents, e)
-                merged_props = _merge_nodeitem_lists(merged_props, p)
-            rebuild_node_categories_with_presets(merged_ents, merged_props)
-            self.report({'INFO'}, f"Import: '{ns}' "
-                                  f"({len(STORE.data[ns]['classes'])} classes, {len(STORE.data[ns]['properties'])} properties)")
-        except Exception as e:
-            self.report({'ERROR'}, f"Import fallito: {e}"); return {'CANCELLED'}
-        return {'FINISHED'}
-    def invoke(self, context, event):
-        context.window_manager.fileselect_add(self); return {'RUNNING_MODAL'}
-
-class ONTO3D_OT_GeneratePresets(bpy.types.Operator):
-    bl_idname = "onto3d.generate_presets"; bl_label = "Add Nodes"
-    bl_description = "Generate presets for the selected namespaces"
-    def execute(self, context):
-        sc = context.scene
-        selected_ns = tuple(sc.onto3d_ns_enum) if sc.onto3d_ns_enum else None
-        # compute the total number of entities/properties for the selected namespaces (or all)
-        if selected_ns:
-            total_ents = sum(len(STORE.data[ns]['classes']) for ns in selected_ns if ns in STORE.data)
-            total_props = sum(len(STORE.data[ns]['properties']) for ns in selected_ns if ns in STORE.data)
+                all_ents = _merge_nodeitem_lists(all_ents, e)
+                all_props = _merge_nodeitem_lists(all_props, p)
         else:
-            total_ents = sum(len(blob['classes']) for blob in STORE.data.values())
-            total_props = sum(len(blob['properties']) for blob in STORE.data.values())
-        limit = max(total_ents, total_props, 0)
-        if limit == 0:
-            rebuild_node_categories_with_presets([], [])
-            self.report({'INFO'}, "No entities/properties found for the selected namespaces.")
-            return {'FINISHED'}
-        # generate all items without filtering
-        ents, props = build_preset_items(
-            filter_text="",
-            namespaces=selected_ns,
-            limit_per_kind=limit
-        )
-        # when user explicitly generates presets replace the current menu with the selection
-        rebuild_node_categories_with_presets(ents, props)
-        self.report({'INFO'}, f"Generated {len(ents)} entities, {len(props)} properties.")
-        return {'FINISHED'}
+            # fallback: build fresh from STORE
+            remaining = tuple(STORE.namespaces()) if STORE.namespaces() else None
+            total_ents = sum(len(STORE.data[ns]['classes']) for ns in STORE.data) if STORE.data else 0
+            total_props = sum(len(STORE.data[ns]['properties']) for ns in STORE.data) if STORE.data else 0
+            if total_ents == 0 and total_props == 0:
+                all_ents, all_props = [], []
+            else:
+                all_ents, all_props = build_preset_items(filter_text="", namespaces=remaining, limit_per_kind=max(total_ents, total_props, 0))
+        rebuild_node_categories_with_presets(all_ents, all_props)
+        self.report({'INFO'}, f"Namespace removed:'{self.ns_key}'")
+    else:
+        self.report({'WARNING'}, "Namespace not found")
+    return {'FINISHED'}
 
-class ONTO3D_OT_ClearPresets(bpy.types.Operator):
-    bl_idname = "onto3d.clear_presets"; bl_label = "Clear Nodes"
-    bl_description = "Clear all Add-menu presets"
-    def execute(self, context):
+def execute(self, context):
+    try:
+        ns = import_rdf_to_store(self.filepath, self.ns_hint or None)
+        rebuild_dynamic_enums_and_menus()
+        # generate Add-menu presets automatically for the newly imported namespace
+        ents, props = build_preset_items(filter_text="", namespaces=(ns,), limit_per_kind=200)
+        # store presets per-namespace and rebuild the global merged menu
+        global _DYNAMIC_ENTITY_ITEMS, _DYNAMIC_PROPERTY_ITEMS, _PRESET_MAP
+        _PRESET_MAP[ns] = (ents, props)
+        merged_ents = []
+        merged_props = []
+        for e,p in _PRESET_MAP.values():
+            merged_ents = _merge_nodeitem_lists(merged_ents, e)
+            merged_props = _merge_nodeitem_lists(merged_props, p)
+        rebuild_node_categories_with_presets(merged_ents, merged_props)
+        self.report({'INFO'}, f"Import: '{ns}' "
+                              f"({len(STORE.data[ns]['classes'])} classes, {len(STORE.data[ns]['properties'])} properties)")
+    except Exception as e:
+        self.report({'ERROR'}, f"Import fallito: {e}"); return {'CANCELLED'}
+    return {'FINISHED'}
+def invoke(self, context, event):
+    context.window_manager.fileselect_add(self); return {'RUNNING_MODAL'}
+
+def execute(self, context):
+    sc = context.scene
+    selected_ns = tuple(sc.onto3d_ns_enum) if sc.onto3d_ns_enum else None
+    # compute the total number of entities/properties for the selected namespaces (or all)
+    if selected_ns:
+        total_ents = sum(len(STORE.data[ns]['classes']) for ns in selected_ns if ns in STORE.data)
+        total_props = sum(len(STORE.data[ns]['properties']) for ns in selected_ns if ns in STORE.data)
+    else:
+        total_ents = sum(len(blob['classes']) for blob in STORE.data.values())
+        total_props = sum(len(blob['properties']) for blob in STORE.data.values())
+    limit = max(total_ents, total_props, 0)
+    if limit == 0:
         rebuild_node_categories_with_presets([], [])
-        self.report({'INFO'}, "Cleared ONTO3D Add-menu presets.")
+        self.report({'INFO'}, "No entities/properties found for the selected namespaces.")
         return {'FINISHED'}
+    # generate all items without filtering
+    ents, props = build_preset_items(
+        filter_text="",
+        namespaces=selected_ns,
+        limit_per_kind=limit
+    )
+    # when user explicitly generates presets replace the current menu with the selection
+    rebuild_node_categories_with_presets(ents, props)
+    self.report({'INFO'}, f"Generated {len(ents)} entities, {len(props)} properties.")
+    return {'FINISHED'}
 
-class ONTO3D_OT_ReloadAddon(bpy.types.Operator):
-    """Reload the Onto3D addon from disk (for development purposes)."""
-    bl_idname = "onto3d.reload_addon"
-    bl_label = "Reload Onto3D Addon"
+def execute(self, context):
+    rebuild_node_categories_with_presets([], [])
+    self.report({'INFO'}, "Cleared ONTO3D Add-menu presets.")
+    return {'FINISHED'}
 
-    def execute(self, context):
-        import importlib, sys
-        addon_name = __name__
-        if addon_name in sys.modules:
-            importlib.reload(sys.modules[addon_name])
-        else:
-            importlib.import_module(addon_name)
-        self.report({'INFO'}, "Onto3D ricaricato")
-        return {'FINISHED'}
+def execute(self, context):
+    import importlib, sys
+    addon_name = __name__
+    if addon_name in sys.modules:
+        importlib.reload(sys.modules[addon_name])
+    else:
+        importlib.import_module(addon_name)
+    self.report({'INFO'}, "Onto3D ricaricato")
+    return {'FINISHED'}
 
 # ================================
 # Onto3D – Connect Geometry Panel
@@ -771,130 +791,98 @@ def _remove_all_links_for_node(node):
     node["onto3d_linked_objects"] = []
     return count
 
-class ONTO3D_OT_CreateConnection(bpy.types.Operator):
-    """Connects the active geometry to the active node."""
-    bl_idname = "onto3d.create_connection"
-    bl_label = "Create"
-    bl_options = {'UNDO'}
-
-    def execute(self, context):
-        node = _find_active_node(context)
-        if not node:
-            self.report({'ERROR'}, "No active node.")
-            return {'CANCELLED'}
-        geoms = _gather_selected_geometry(context)
-        if not geoms:
-            self.report({'ERROR'}, "Select one or more geometries (or an Empty with child geometries).")
-            return {'CANCELLED'}
-        created = 0
-        for g in geoms:
-            _node_add_link(node, g)
-            created += 1
-        self.report({'INFO'}, f"{node.name} connected to {created}”.")
-        return {'FINISHED'}
+def execute(self, context):
+    node = _find_active_node(context)
+    if not node:
+        self.report({'ERROR'}, "No active node.")
+        return {'CANCELLED'}
+    geoms = _gather_selected_geometry(context)
+    if not geoms:
+        self.report({'ERROR'}, "Select one or more geometries (or an Empty with child geometries).")
+        return {'CANCELLED'}
+    created = 0
+    for g in geoms:
+        _node_add_link(node, g)
+        created += 1
+    self.report({'INFO'}, f"{node.name} connected to {created}.")
+    return {'FINISHED'}
     
-class ONTO3D_OT_OpenIRI(bpy.types.Operator):
-    """Open the IRI in the default browser (new tab)."""
-    bl_idname = "onto3d.open_iri"
-    bl_label = "Open in Web Browser"
-
-    iri: bpy.props.StringProperty(name="IRI", default="")
-
-    def execute(self, context):
-        url = (self.iri or "").strip()
-        if not url:
-            self.report({'ERROR'}, "IRI mancante.")
-            return {'CANCELLED'}
-        try:
-            import re, webbrowser
-            # If the URL scheme is missing, try prepending "https://" for cases like 'www.example.org'
-            if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', url):
-                if url.startswith("www."):
-                    url = "https://" + url
-            webbrowser.open_new_tab(url)
-            self.report({'INFO'}, "Opened in default browser.")
-            return {'FINISHED'}
-        except Exception as e:
-            self.report({'ERROR'}, f"Unable to open IRI: {e}")
-            return {'CANCELLED'}
-
-
-class ONTO3D_OT_BreakConnection(bpy.types.Operator):
-    """Disconnect the selected geometry from the active node.
-    If no geometry is selected, remove ALL links from the node (with confirmation)."""
-    bl_idname = "onto3d.break_connection"
-    bl_label = "Break"
-    bl_options = {'UNDO'}
-
-    remove_all: bpy.props.BoolProperty(
-        name="Remove all from node",
-        description="In no geometry has been selected, removes all links from the active node",
-        default=False
-    )
-
-    def invoke(self, context, event):
-        geoms = _gather_selected_geometry(context)
-        if not geoms:
-            self.remove_all = True
-            return context.window_manager.invoke_confirm(self, event)
-        return self.execute(context)
-
-    def execute(self, context):
-        node = _find_active_node(context)
-        if not node:
-            self.report({'ERROR'}, "No active node found.")
-            return {'CANCELLED'}
-        geoms = _gather_selected_geometry(context)
-        if geoms:
-            removed = 0
-            for g in geoms:
-                if "onto3d_uuid" in node and "onto3d_linked_nodes" in g and node["onto3d_uuid"] in g["onto3d_linked_nodes"]:
-                    _node_remove_link(node, g)
-                    removed += 1
-            self.report({'INFO'}, f"Disconnected {removed} geometries from node “{node.name}”.")
-            return {'FINISHED'}
-        if self.remove_all:
-            n = _remove_all_links_for_node(node)
-            self.report({'INFO'}, f"Removed {n} connections from node “{node.name}”.")
-            return {'FINISHED'}
-        self.report({'INFO'}, "No geometry selected. No action taken.")
+def execute(self, context):
+    url = (self.iri or "").strip()
+    if not url:
+        self.report({'ERROR'}, "IRI mancante.")
+        return {'CANCELLED'}
+    try:
+        import re, webbrowser
+        # If the URL scheme is missing, try prepending "https://" for cases like 'www.example.org'
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', url):
+            if url.startswith("www."):
+                url = "https://" + url
+        webbrowser.open_new_tab(url)
+        self.report({'INFO'}, "Opened in default browser.")
+        return {'FINISHED'}
+    except Exception as e:
+        self.report({'ERROR'}, f"Unable to open IRI: {e}")
         return {'CANCELLED'}
 
-class ONTO3D_OT_UpdateConnections(bpy.types.Operator):
-    """Update the active node's connections (handles renames and deletions)."""
-    bl_idname = "onto3d.update_connections"
-    bl_label = "Update"
-    bl_options = {'UNDO'}
 
-    def execute(self, context):
-        node = _find_active_node(context)
-        if not node:
-            self.report({'ERROR'}, "No active node found in an open Node Editor.")
-            return {'CANCELLED'}
-        nid = node.get("onto3d_uuid") or _ensure_node_uuid(node)
+def invoke(self, context, event):
+    geoms = _gather_selected_geometry(context)
+    if not geoms:
+        self.remove_all = True
+        return context.window_manager.invoke_confirm(self, event)
+    return self.execute(context)
 
-        # rebuild the list of objects that actually reference this node_uuid
-        objs_with_ref = [o for o in bpy.data.objects if nid in o.get("onto3d_linked_nodes", [])]
-        new_links = sorted(o.name for o in objs_with_ref)
-        old_links = list(node.get("onto3d_linked_objects", []))
-
-        added = len([n for n in new_links if n not in old_links])
-        removed = len([n for n in old_links if n not in new_links])
-
-        node["onto3d_linked_objects"] = new_links
-
-        # sync object side: add/remove nid where needed
-        for o in bpy.data.objects:
-            lst = list(o.get("onto3d_linked_nodes", []))
-            if o.name in new_links:
-                if nid not in lst:
-                    lst.append(nid); o["onto3d_linked_nodes"] = sorted(lst)
-            else:
-                if nid in lst:
-                    o["onto3d_linked_nodes"] = [x for x in lst if x != nid]
-
-        self.report({'INFO'}, f"Connections updated: +{added} -{removed}")
+def execute(self, context):
+    node = _find_active_node(context)
+    if not node:
+        self.report({'ERROR'}, "No active node found.")
+        return {'CANCELLED'}
+    geoms = _gather_selected_geometry(context)
+    if geoms:
+        removed = 0
+        for g in geoms:
+            if "onto3d_uuid" in node and "onto3d_linked_nodes" in g and node["onto3d_uuid"] in g["onto3d_linked_nodes"]:
+                _node_remove_link(node, g)
+                removed += 1
+        self.report({'INFO'}, f"Disconnected {removed} geometries from node \"{node.name}\".")
         return {'FINISHED'}
+    if self.remove_all:
+        n = _remove_all_links_for_node(node)
+        self.report({'INFO'}, f"Removed {n} connections from node \"{node.name}\".")
+        return {'FINISHED'}
+    self.report({'INFO'}, "No geometry selected. No action taken.")
+    return {'CANCELLED'}
+
+def execute(self, context):
+    node = _find_active_node(context)
+    if not node:
+        self.report({'ERROR'}, "No active node found in an open Node Editor.")
+        return {'CANCELLED'}
+    nid = node.get("onto3d_uuid") or _ensure_node_uuid(node)
+
+    # rebuild the list of objects that actually reference this node_uuid
+    objs_with_ref = [o for o in bpy.data.objects if nid in o.get("onto3d_linked_nodes", [])]
+    new_links = sorted(o.name for o in objs_with_ref)
+    old_links = list(node.get("onto3d_linked_objects", []))
+
+    added = len([n for n in new_links if n not in old_links])
+    removed = len([n for n in old_links if n not in new_links])
+
+    node["onto3d_linked_objects"] = new_links
+
+    # sync object side: add/remove nid where needed
+    for o in bpy.data.objects:
+        lst = list(o.get("onto3d_linked_nodes", []))
+        if o.name in new_links:
+            if nid not in lst:
+                lst.append(nid); o["onto3d_linked_nodes"] = sorted(lst)
+        else:
+            if nid in lst:
+                o["onto3d_linked_nodes"] = [x for x in lst if x != nid]
+
+    self.report({'INFO'}, f"Connections updated: +{added} -{removed}")
+    return {'FINISHED'}
 
 # ================================
 # === SYNC VIEWS + VIEW HELPERS ===
@@ -1022,12 +1010,7 @@ def _handle_view_to_graph_sync(scene):
                 _select_objects_in_view(objs, make_active=True)
             _last_active_node_uuid = nid
 
-class ONTO3D_OT_ToggleSyncViews(bpy.types.Operator):
-    """Toggle synchronization between Viewport and Graph."""
-    bl_idname = "onto3d.toggle_sync_views"
-    bl_label = "Sync views"
-
-    def execute(self, context):
+def execute(self, context):
         global _SYNC_HANDLER, _last_sel_uuids, _last_active_node_uuid
         wm = context.window_manager
         if not hasattr(wm, "onto3d_sync_views"):
@@ -1053,14 +1036,7 @@ class ONTO3D_OT_ToggleSyncViews(bpy.types.Operator):
             self.report({'INFO'}, "Sync views: ON")
         return {'FINISHED'}
 
-class ONTO3D_OT_NodeZoomNode(bpy.types.Operator):
-    """Select the node in the Node Editor and center the view (node.view_selected)."""
-    bl_idname = "onto3d.node_zoom_node"
-    bl_label = "Zoom to node"
-
-    node_uuid: bpy.props.StringProperty(name="Node UUID", default="")
-
-    def execute(self, context):
+def execute(self, context):
         n = _find_node_by_uuid(self.node_uuid)
         if not n:
             self.report({'WARNING'}, "Node not found.")
@@ -1073,14 +1049,7 @@ class ONTO3D_OT_NodeZoomNode(bpy.types.Operator):
             self.report({'WARNING'}, "Unable to activate the Node Editor or center the node.")
             return {'CANCELLED'}
 
-class ONTO3D_OT_NodeZoomGeometry(bpy.types.Operator):
-    """Frame the geometry/ies linked to the node."""
-    bl_idname = "onto3d.node_zoom_geometry"
-    bl_label = "Zoom to geometry"
-
-    node_uuid: bpy.props.StringProperty(name="Node UUID", default="")
-
-    def execute(self, context):
+def execute(self, context):
         node = _find_node_by_uuid(self.node_uuid)
         if not node:
             self.report({'WARNING'}, "Nodo non trovato.")
@@ -1104,14 +1073,7 @@ class ONTO3D_OT_NodeZoomGeometry(bpy.types.Operator):
             self.report({'INFO'}, "Inquadrata la geometria collegata.")
         return {'FINISHED'}
 
-class ONTO3D_OT_NodeIsolateGeometry(bpy.types.Operator):
-    """Isolate (Local View) the geometry/ies linked to the node (toggle)."""
-    bl_idname = "onto3d.node_isolate_geometry"
-    bl_label = "Isolate geometry"
-
-    node_uuid: bpy.props.StringProperty(name="Node UUID", default="")
-
-    def execute(self, context):
+def execute(self, context):
         node = _find_node_by_uuid(self.node_uuid)
         if not node:
             self.report({'WARNING'}, "Node not found")
@@ -1137,15 +1099,7 @@ class ONTO3D_OT_NodeIsolateGeometry(bpy.types.Operator):
             self.report({'INFO'}, "Local View toggled on/off for linked geometries.")
         return {'FINISHED'}
 
-class ONTO3D_PT_ConnectGeometry(bpy.types.Panel):
-    """N-panel section for managing node ↔ geometry links."""
-    bl_label = "Connect geometry"
-    bl_idname = "ONTO3D_PT_ConnectGeometry"
-    bl_space_type = 'NODE_EDITOR'
-    bl_region_type = 'UI'
-    bl_category = "Onto3D"
- 
-    def draw(self, context):
+def draw(self, context):
         layout = self.layout
         node = _find_active_node(context)
         if node:
@@ -1176,15 +1130,7 @@ class ONTO3D_PT_ConnectGeometry(bpy.types.Panel):
         col.label(text="3) Press Create or Break.")
 
 # --- rimpiazza la classe ONTO3D_PT_ViewportPanel con il nuovo pannello sotto "Item" ---
-class ONTO3D_PT_ItemProperties(bpy.types.Panel):
-    """Item N-panel: shows metadata of the node linked to the selected object."""
-    bl_label = "Onto3D Properties"
-    bl_idname = "ONTO3D_PT_ItemProperties"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Item"
-
-    def draw(self, context):
+def draw(self, context):
         layout = self.layout
         obj = context.active_object
         if not obj:
@@ -1228,45 +1174,42 @@ class ONTO3D_PT_ItemProperties(bpy.types.Panel):
         op.node_uuid = nid
 
 # Registration: make sure all classes are listed here (add/remove names as needed)
-classes = (
-    ONTO3DInSocket, ONTO3DOutSocket, ONTO3DGraphTree,
-    ONTO3DEntityNode, ONTO3DPropertyNode,
-    ONTO3D_PT_OntologiesPanel, ONTO3D_OT_ExportNamespace,
-    ONTO3D_OT_RemoveNamespace, ONTO3D_OT_ImportOntology,
-    ONTO3D_OT_GeneratePresets, ONTO3D_OT_ClearPresets,
-    ONTO3D_OT_ReloadAddon,
-    ONTO3D_OT_CreateConnection, ONTO3D_OT_BreakConnection, ONTO3D_PT_ConnectGeometry,
-    ONTO3D_OT_UpdateConnections,
-    ONTO3D_OT_ToggleSyncViews,
-    ONTO3D_OT_NodeZoomGeometry,
-    ONTO3D_OT_NodeIsolateGeometry,
-    ONTO3D_OT_NodeZoomNode,
-    ONTO3D_PT_ItemProperties,
-    ONTO3D_OT_OpenIRI,
-)
-
 def register():
-    for cls in classes:
-        try:
-            bpy.utils.register_class(cls)
-        except Exception:
-            pass
-    # ensure Add menu starts empty
-    rebuild_node_categories_with_presets([], [])
+    from . import nodes, ui_panels, preferences_ontology
+    if hasattr(nodes, 'register'): nodes.register()
+    if hasattr(ui_panels, 'register'): ui_panels.register()
+    if hasattr(preferences_ontology, 'register'): preferences_ontology.register()
 
 def unregister():
-    # remove sync handler if active
-    global _SYNC_HANDLER
+    # Delegate unregister in reverse order to ensure teardown happens cleanly
     try:
-        if _SYNC_HANDLER and _SYNC_HANDLER in bpy.app.handlers.depsgraph_update_post:
-            bpy.app.handlers.depsgraph_update_post.remove(_SYNC_HANDLER)
+        from . import preferences_ontology
     except Exception:
-        pass
-    try: unregister_node_categories("ONTO3D_NODES_CAT")
-    except Exception: pass
-    for cls in reversed(classes):
+        preferences_ontology = None
+    try:
+        from . import ui_panels
+    except Exception:
+        ui_panels = None
+    try:
+        from . import nodes
+    except Exception:
+        nodes = None
+
+    if preferences_ontology is not None and hasattr(preferences_ontology, "unregister"):
         try:
-            bpy.utils.unregister_class(cls)
+            preferences_ontology.unregister()
+        except Exception:
+            pass
+
+    if ui_panels is not None and hasattr(ui_panels, "unregister"):
+        try:
+            ui_panels.unregister()
+        except Exception:
+            pass
+
+    if nodes is not None and hasattr(nodes, "unregister"):
+        try:
+            nodes.unregister()
         except Exception:
             pass
 
@@ -1288,6 +1231,8 @@ if __name__ == "__main__":
 
 
 # ---- Onto3D: attach safe poll at runtime (avoids panel access during restricted context) ----
+
+    onto3d_prefs.unregister()
 def __onto3d_attach_safe_polls():
     try:
         import bpy, builtins
