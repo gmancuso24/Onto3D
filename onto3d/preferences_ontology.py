@@ -4,6 +4,9 @@ from bpy.props import StringProperty, BoolProperty, CollectionProperty, EnumProp
 from nodeitems_utils import NodeCategory, NodeItem, register_node_categories, unregister_node_categories
 import os, json
 
+# Import RDF parsing from rdf_utils
+from .rdf_utils import parse_ontology_file
+
 # Default (fallback) ids – verranno sovrascritti se troviamo le classi registrate
 ENTITY_NODE_ID_DEFAULT   = "Onto3DNodeEntity"
 PROPERTY_NODE_ID_DEFAULT = "Onto3DNodeProperty"
@@ -20,73 +23,6 @@ def _poll_onto3d(context):
     if not space or space.type != 'NODE_EDITOR':
         return False
     return getattr(space, "tree_type", "") == TREE_TYPE_ID
-
-def _parse_ttl_or_owl_any(path_or_url: str, is_url: bool = False):
-    try:
-        import rdflib
-        from rdflib.namespace import RDF, RDFS, OWL, SKOS
-    except Exception as e:
-        raise RuntimeError("rdflib is not installed or not available in Blender's environment") from e
-
-    g = rdflib.Graph()
-    # rdflib capisce da solo il formato nella maggior parte dei casi; lasciamo a lui il detection.
-    g.parse(path_or_url)
-
-    def _label_for(node):
-        # prova rdfs:label, poi skos:prefLabel, se nulla usa localname dell'URI
-        lbl = g.value(node, RDFS.label)
-        if lbl:
-            return str(lbl)
-        lbl = g.value(node, SKOS.prefLabel)
-        if lbl:
-            return str(lbl)
-        # localname fallback
-        try:
-            s = str(node)
-            for sep in ['#', '/', ':']:
-                if sep in s:
-                    s = s.rsplit(sep, 1)[-1]
-            return s
-        except Exception:
-            return str(node)
-
-    entities = []
-    properties = []
-
-    # --- Classi ---
-    seen_classes = set()
-    for s in g.subjects(RDF.type, RDFS.Class):
-        sid = str(s)
-        if sid in seen_classes: 
-            continue
-        entities.append((sid, _label_for(s), ""))  # ns vuoto: opzionale
-        seen_classes.add(sid)
-
-    for s in g.subjects(RDF.type, OWL.Class):
-        sid = str(s)
-        if sid in seen_classes:
-            continue
-        entities.append((sid, _label_for(s), ""))
-        seen_classes.add(sid)
-
-    # --- Proprietà ---
-    seen_props = set()
-    for s in g.subjects(RDF.type, RDF.Property):
-        pid = str(s)
-        if pid in seen_props:
-            continue
-        properties.append((pid, _label_for(s), ""))
-        seen_props.add(pid)
-
-    for ptype in (OWL.ObjectProperty, OWL.DatatypeProperty, OWL.AnnotationProperty):
-        for s in g.subjects(RDF.type, ptype):
-            pid = str(s)
-            if pid in seen_props:
-                continue
-            properties.append((pid, _label_for(s), ""))
-            seen_props.add(pid)
-
-    return entities, properties
 
 # =========================
 # Public API (what your __init__.py will call)
@@ -129,7 +65,7 @@ class ONTO3D_PG_Ontology(PropertyGroup):
     prefix: StringProperty(name="Prefix", description="Shown in Add menu labels, e.g. CRM, CRA", default="")
     enabled: BoolProperty(name="Enabled", default=True)
 
-# Save the parsed data as a JSON string (persists in preferences)
+    # Save the parsed data as a JSON string (persists in preferences)
     cached_data: StringProperty(
         name="Cached Data",
         description="Parsed ontology data (JSON)",
@@ -170,7 +106,7 @@ class ONTO3D_Preferences(AddonPreferences):
             elif item.source_type == 'URL':
                 box.prop(item, "path", text="URL")
             
-            #Show cache status
+            # Show cache status
             if item.cached_data:
                 box.label(text="✓ Cached", icon='CHECKMARK')
                 box.operator("onto3d.ontology_clear_cache", icon='TRASH')
@@ -263,6 +199,12 @@ class ONTO3D_OT_OntologyClearCache(Operator):
 # Parse / Load
 # =========================
 def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
+    """
+    Parse ontology from source (file, URL, or builtin).
+    
+    Returns:
+        Dict with keys: name, prefix, entities, properties
+    """
     slug = (item.slug.strip() or _slugify(item.name))[:32]
     prefix = item.prefix.strip() or slug.upper()
     entities, properties = [], []
@@ -280,13 +222,16 @@ def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
 
             lower = path.lower()
             if lower.endswith((".json", ".jsonld")):
+                # Simple JSON format
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) for e in data.get("entities", [])]
-                properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) for p in data.get("properties", [])]
+                entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) 
+                           for e in data.get("entities", [])]
+                properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) 
+                             for p in data.get("properties", [])]
             else:
-                # RDF/XML (.rdf), TTL (.ttl), OWL (.owl), anche JSON-LD complesso: usa rdflib
-                entities, properties = _parse_ttl_or_owl_any(path, is_url=False)
+                # RDF/XML (.rdf), TTL (.ttl), OWL (.owl): use rdflib via rdf_utils
+                entities, properties = parse_ontology_file(path, is_url=False)
 
         elif item.source_type == 'URL':
             url = (item.path or "").strip()
@@ -294,7 +239,7 @@ def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
                 raise ValueError("Empty URL")
             lower = url.lower()
             if lower.endswith((".json", ".jsonld")):
-                # scarica JSON e parse semplice
+                # Download and parse JSON
                 import urllib.request, tempfile
                 fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(lower)[1] or ".json")
                 os.close(fd)
@@ -302,20 +247,24 @@ def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
                     urllib.request.urlretrieve(url, tmp_path)
                     with open(tmp_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                    entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) for e in data.get("entities", [])]
-                    properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) for p in data.get("properties", [])]
+                    entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) 
+                               for e in data.get("entities", [])]
+                    properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) 
+                                 for p in data.get("properties", [])]
                 finally:
                     try:
                         os.remove(tmp_path)
                     except Exception:
                         pass
             else:
-                # lascia che rdflib faccia il fetch/parsing direttamente dall’URL (supporta http/https/file)
-                entities, properties = _parse_ttl_or_owl_any(url, is_url=True)
+                # Let rdflib fetch/parse directly from URL
+                entities, properties = parse_ontology_file(url, is_url=True)
 
     return {"name": item.name.strip() or slug, "prefix": prefix, "entities": entities, "properties": properties}
 
+
 def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
+    """Load ontologies from preferences, using cache when available"""
     targets = range(len(prefs.ontologies)) if only_index is None else [only_index]
     for i in targets:
         it = prefs.ontologies[i]
@@ -324,7 +273,7 @@ def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
             ONTO_REG.pop(slug, None)
             continue
 
-        # try to load from cache
+        # Try to load from cache
         if it.cached_data:
             try:
                 cached = json.loads(it.cached_data)
@@ -333,10 +282,10 @@ def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
             except Exception as e:
                 print(f"[Onto3D] Cache corrupted for '{it.name}', reloading: {e}")
 
-        # if cache cannot be found or is corrupted, parse from source
+        # If cache cannot be found or is corrupted, parse from source
         try:
             model = _parse_ontology_from_source(it)
-            # save to cache
+            # Save to cache
             it.cached_data = json.dumps({
                 "name": model["name"],
                 "prefix": model["prefix"],
@@ -402,7 +351,7 @@ def _rebuild_node_categories():
             cat_defs.append(NodeCategory(cid, f"Onto3D • {data['name']} • Properties", items=prop_items))
             _NODE_CAT_IDS.add(cid)
 
-    # "All"
+    # "All" categories
     all_ent, all_prop = [], []
     for slug, data in ONTO_REG.items():
         pre = data["prefix"]
