@@ -129,6 +129,13 @@ class ONTO3D_PG_Ontology(PropertyGroup):
     prefix: StringProperty(name="Prefix", description="Shown in Add menu labels, e.g. CRM, CRA", default="")
     enabled: BoolProperty(name="Enabled", default=True)
 
+# Save the parsed data as a JSON string (persists in preferences)
+    cached_data: StringProperty(
+        name="Cached Data",
+        description="Parsed ontology data (JSON)",
+        default=""
+    )
+
 class ONTO3D_Preferences(AddonPreferences):
     bl_idname = __package__ if __package__ else __name__
 
@@ -162,6 +169,14 @@ class ONTO3D_Preferences(AddonPreferences):
                 box.prop(item, "path", text="File")
             elif item.source_type == 'URL':
                 box.prop(item, "path", text="URL")
+            
+            #Show cache status
+            if item.cached_data:
+                box.label(text="✓ Cached", icon='CHECKMARK')
+                box.operator("onto3d.ontology_clear_cache", icon='TRASH')
+            else:
+                box.label(text="Cache: Not present", icon='ERROR')
+                
             row = box.row(align=True)
             row.prop(item, "enabled", toggle=True)
             row.operator("onto3d.ontology_reload_one", text="Apply", icon="CHECKMARK")
@@ -231,6 +246,19 @@ class ONTO3D_OT_RebuildNodeMenu(Operator):
         self.report({'INFO'}, "Node menu rebuilt")
         return {'FINISHED'}
 
+class ONTO3D_OT_OntologyClearCache(Operator):
+    bl_idname = "onto3d.ontology_clear_cache"
+    bl_label = "Clear Cache"
+    bl_description = "Force reload from source on next startup"
+    bl_options = {'REGISTER', 'INTERNAL'}
+    
+    def execute(self, context):
+        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        if 0 <= prefs.active_index < len(prefs.ontologies):
+            prefs.ontologies[prefs.active_index].cached_data = ""
+            self.report({'INFO'}, "Cache cleared. Reload to re-parse from source.")
+        return {'FINISHED'}
+    
 # =========================
 # Parse / Load
 # =========================
@@ -295,17 +323,35 @@ def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
         if not it.enabled:
             ONTO_REG.pop(slug, None)
             continue
+
+        # try to load from cache
+        if it.cached_data:
+            try:
+                cached = json.loads(it.cached_data)
+                ONTO_REG[slug] = cached
+                continue
+            except Exception as e:
+                print(f"[Onto3D] Cache corrupted for '{it.name}', reloading: {e}")
+
+        # if cache cannot be found or is corrupted, parse from source
         try:
             model = _parse_ontology_from_source(it)
+            # save to cache
+            it.cached_data = json.dumps({
+                "name": model["name"],
+                "prefix": model["prefix"],
+                "entities": model.get("entities", []),
+                "properties": model.get("properties", []),
+            })
+            ONTO_REG[slug] = {
+                "name": model["name"],
+                "prefix": model["prefix"],
+                "entities": list(model.get("entities", [])),
+                "properties": list(model.get("properties", [])),
+            }
         except Exception as e:
             print(f"[Onto3D] Error loading ontology '{it.name}': {e}")
             continue
-        ONTO_REG[slug] = {
-            "name": model["name"],
-            "prefix": model["prefix"],
-            "entities": list(model.get("entities", [])),
-            "properties": list(model.get("properties", [])),
-        }
 
 # =========================
 # Node menus (Add)
@@ -423,4 +469,5 @@ _classes = (
     ONTO3D_OT_OntologyReloadOne,
     ONTO3D_OT_OntologyReloadAll,
     ONTO3D_OT_RebuildNodeMenu,
+    ONTO3D_OT_OntologyClearCache
 )
