@@ -8,7 +8,8 @@ from bpy.types import Operator
 from bpy.props import StringProperty, BoolProperty, EnumProperty
 from .rdf_utils import (
     ensure_rdflib, install_rdflib_instructions,
-    parse_class_uri, parse_property_uri, get_linked_entity_node
+    parse_class_uri, parse_property_uri, get_linked_entity_node,
+    protege_to_blender_name
 )
 from .graph_layout import auto_layout_nodes, estimate_graph_complexity
 
@@ -55,15 +56,26 @@ def import_graph_from_ttl(node_tree, filepath: str, merge_mode='replace', auto_l
     node_map = {}
     existing_node_map = {}
     
-    # In update/merge mode, map existing nodes by their URI or name
+    # In update/merge mode, map existing nodes by their stored URI
     if merge_mode in ('merge', 'update'):
         for node in node_tree.nodes:
             if node.bl_idname == "Onto3DNodeEntity":
-                # Try to reconstruct URI from node properties
-                from .rdf_utils import resolve_class_uri, sanitize_node_name
-                safe_name = sanitize_node_name(node.name)
-                uri = str(ONTO3D[safe_name])
-                existing_node_map[uri] = node
+                # Reconstruct URI from node's ontology properties
+                ontology_slug = getattr(node, "onto3d_ontology", "")
+                class_id = getattr(node, "onto3d_entity_id", "")
+                
+                if ontology_slug and class_id:
+                    # Try to resolve the actual URI
+                    from .rdf_utils import resolve_class_uri
+                    uri = resolve_class_uri(ontology_slug, class_id)
+                    if uri:
+                        existing_node_map[uri] = node
+                    else:
+                        # Fallback to onto3d namespace
+                        from .rdf_utils import sanitize_node_name
+                        safe_name = sanitize_node_name(node.name)
+                        uri = str(ONTO3D[safe_name])
+                        existing_node_map[uri] = node
     
     # Step 1: Import individuals (entity nodes)
     for subject in g.subjects(RDF.type, None):
@@ -97,6 +109,11 @@ def import_graph_from_ttl(node_tree, filepath: str, merge_mode='replace', auto_l
             node = existing_node_map[subject_str]
             stats['entities_updated'] += 1
         else:
+            # Check if we already created this node in this import session
+            if subject_str in node_map:
+                # Skip duplicates
+                continue
+            
             # Create new entity node
             node = node_tree.nodes.new("Onto3DNodeEntity")
             stats['entities_created'] += 1
@@ -105,21 +122,22 @@ def import_graph_from_ttl(node_tree, filepath: str, merge_mode='replace', auto_l
         node.onto3d_ontology = ontology_slug
         node.onto3d_entity_id = class_id
         
-        # Set label (from rdfs:label or URI fragment)
+        # MAPPING: label (Protégé, with underscores) -> description (Blender, with spaces)
         label = g.value(subject, RDFS.label)
         if label:
-            node.onto3d_title = str(label)
-        else:
-            # Fallback to URI fragment
-            if '#' in subject_str:
-                node.onto3d_title = subject_str.split('#')[-1]
-            elif '/' in subject_str:
-                node.onto3d_title = subject_str.rstrip('/').split('/')[-1]
+            # Convert underscores to spaces for Blender
+            blender_label = protege_to_blender_name(str(label))
+            node.onto3d_description = blender_label
         
-        # Set description (from rdfs:comment)
+        # MAPPING: comment (Protégé) -> title (Blender)
         comment = g.value(subject, RDFS.comment)
         if comment:
-            node.onto3d_description = str(comment)
+            node.onto3d_title = str(comment)
+        
+        # If no comment but we have label, use label as fallback for title
+        if not comment and label:
+            blender_label = protege_to_blender_name(str(label))
+            node.onto3d_title = blender_label
         
         # Set IRI reference (from rdfs:seeAlso)
         see_also = g.value(subject, RDFS.seeAlso)
@@ -218,8 +236,11 @@ def import_graph_from_ttl(node_tree, filepath: str, merge_mode='replace', auto_l
         )
         
         if not has_positions:
-            suggested_algorithm = estimate_graph_complexity(node_tree)
-            auto_layout_nodes(node_tree, algorithm=suggested_algorithm)
+            try:
+                suggested_algorithm = estimate_graph_complexity(node_tree)
+                auto_layout_nodes(node_tree, algorithm=suggested_algorithm)
+            except Exception as e:
+                print(f"[Onto3D] Auto-layout failed: {e}")
     
     return stats
 

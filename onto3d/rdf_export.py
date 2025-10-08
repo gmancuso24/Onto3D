@@ -5,11 +5,11 @@ Compatible with Protégé and other OWL tools
 
 import bpy
 from bpy.types import Operator
-from bpy.props import StringProperty
+from bpy.props import StringProperty, BoolProperty
 from .rdf_utils import (
     ensure_rdflib, install_rdflib_instructions,
     get_namespace_bindings, resolve_class_uri, resolve_property_uri,
-    get_linked_entity_node, sanitize_node_name
+    get_linked_entity_node, sanitize_node_name, blender_to_protege_name
 )
 
 
@@ -81,22 +81,18 @@ def export_graph_to_ttl(node_tree, filepath: str, include_metadata=True) -> dict
                     g.add((individual_uri, RDF.type, class_uri))
                     stats['triples'] += 1
             
-            # Add label
+            # MAPPING: title (Blender) -> label (Protégé, with underscores)
             title = getattr(node, "onto3d_title", "") or node.name
             if title:
-                g.add((individual_uri, RDFS.label, Literal(title)))
+                # Convert spaces to underscores for Protégé
+                protege_title = blender_to_protege_name(title)
+                g.add((individual_uri, RDFS.label, Literal(protege_title)))
                 stats['triples'] += 1
             
-            # Add description if present
+            # MAPPING: description (Blender) -> comment (Protégé)
             description = getattr(node, "onto3d_description", "")
             if description:
                 g.add((individual_uri, RDFS.comment, Literal(description)))
-                stats['triples'] += 1
-            
-            # Add IRI reference if present
-            iri_value = getattr(node, "onto3d_iri", "")
-            if iri_value:
-                g.add((individual_uri, RDFS.seeAlso, URIRef(iri_value)))
                 stats['triples'] += 1
             
             # Add Blender metadata (optional)
@@ -158,7 +154,7 @@ class ONTO3D_OT_ExportGraphTTL(Operator):
         default="//ontology_export.ttl"
     )
     
-    include_metadata: bpy.props.BoolProperty(
+    include_metadata: BoolProperty(
         name="Include Blender Metadata",
         description="Include node positions and Blender-specific data",
         default=True

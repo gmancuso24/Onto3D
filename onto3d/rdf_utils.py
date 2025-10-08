@@ -7,6 +7,31 @@ import bpy
 from typing import Optional, Tuple, Dict, Any, List
 
 
+def blender_to_protege_name(name: str) -> str:
+    """
+    Convert Blender name (with spaces) to Protégé format (with underscores).
+    
+    Args:
+        name: Blender name (e.g., "Man Made Object")
+    
+    Returns:
+        Protégé name (e.g., "Man_Made_Object")
+    """
+    return name.replace(" ", "_")
+
+
+def protege_to_blender_name(name: str) -> str:
+    """
+    Convert Protégé name (with underscores) to Blender format (with spaces).
+    
+    Args:
+        name: Protégé name (e.g., "Man_Made_Object")
+    
+    Returns:
+        Blender name (e.g., "Man Made Object")
+    """
+    return name.replace("_", " ")
+
 def get_onto_reg() -> Dict[str, Any]:
     """Get ONTO_REG from preferences_ontology module"""
     try:
@@ -150,42 +175,70 @@ def get_namespace_bindings() -> Dict[str, str]:
     
     return bindings
 
+
 def get_linked_entity_node(socket, visited=None):
     """
-    Recursively find the entity node connected to a socket
+    Recursively find the entity node connected to a socket.
+    Handles cycles by tracking visited sockets.
     """
     if visited is None:
         visited = set()
     
-    if not socket.is_linked:
+    if not socket or not socket.is_linked:
         return None
     
-    # Prevent infinite loops by tracking visited nodes
-    socket_id = id(socket)
+    # Use a unique identifier for the socket to prevent infinite loops
+    try:
+        socket_id = (id(socket.id_data), socket.path_from_id())
+    except:
+        # Fallback if path_from_id() fails
+        socket_id = (id(socket.id_data), id(socket))
+    
     if socket_id in visited:
         return None
     visited.add(socket_id)
     
-    for link in socket.links:
-        node = link.from_node if socket.is_output else link.to_node
-        
-        # Skip if we've already visited this node
-        if id(node) in visited:
-            continue
-        visited.add(id(node))
-        
-        if node.bl_idname == 'Onto3DEntityNodeType':
-            return node
-        
-        # Continue searching through connected nodes
-        if socket.is_output and node.inputs:
-            result = get_linked_entity_node(node.inputs[0], visited)
-            if result:
-                return result
-        elif not socket.is_output and node.outputs:
-            result = get_linked_entity_node(node.outputs[0], visited)
-            if result:
-                return result
+    try:
+        for link in socket.links:
+            # Determine the connected node based on socket direction
+            if socket.is_output:
+                # We're on an output socket, follow to the input
+                connected_node = link.to_node
+                next_socket = link.to_socket
+            else:
+                # We're on an input socket, follow from the output
+                connected_node = link.from_node
+                next_socket = link.from_socket
+            
+            if not connected_node:
+                continue
+            
+            # Check if this is an entity node
+            if connected_node.bl_idname in ('Onto3DNodeEntity', 'Onto3DEntityNodeType'):
+                return connected_node
+            
+            # Continue searching through the connected node's sockets
+            # Search in the opposite direction
+            if socket.is_output:
+                # We came from output, search the connected node's outputs
+                for out_socket in connected_node.outputs:
+                    if out_socket != next_socket:  # Don't go back where we came from
+                        result = get_linked_entity_node(out_socket, visited)
+                        if result:
+                            return result
+            else:
+                # We came from input, search the connected node's inputs
+                for in_socket in connected_node.inputs:
+                    if in_socket != next_socket:  # Don't go back where we came from
+                        result = get_linked_entity_node(in_socket, visited)
+                        if result:
+                            return result
+    except RecursionError:
+        print(f"[Onto3D] RecursionError in get_linked_entity_node - stopping recursion")
+        return None
+    except Exception as e:
+        print(f"[Onto3D] Error in get_linked_entity_node: {e}")
+        return None
     
     return None
 
