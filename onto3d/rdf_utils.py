@@ -150,33 +150,42 @@ def get_namespace_bindings() -> Dict[str, str]:
     
     return bindings
 
-
-def get_linked_entity_node(socket):
+def get_linked_entity_node(socket, visited=None):
     """
-    Get the entity node connected to a socket.
-    
-    Args:
-        socket: Input or output socket
-    
-    Returns:
-        Connected entity node or None
+    Recursively find the entity node connected to a socket
     """
+    if visited is None:
+        visited = set()
+    
     if not socket.is_linked:
         return None
     
+    # Prevent infinite loops by tracking visited nodes
+    socket_id = id(socket)
+    if socket_id in visited:
+        return None
+    visited.add(socket_id)
+    
     for link in socket.links:
-        other_socket = link.from_socket if socket.is_output else link.to_socket
-        node = other_socket.node
+        node = link.from_node if socket.is_output else link.to_node
         
-        if node.bl_idname == "Onto3DNodeEntity":
+        # Skip if we've already visited this node
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
+        
+        if node.bl_idname == 'Onto3DEntityNodeType':
             return node
         
-        # If it's a property node, recurse
-        if node.bl_idname == "Onto3DNodeProperty":
-            if socket.is_output:
-                return get_linked_entity_node(node.inputs[0])
-            else:
-                return get_linked_entity_node(node.outputs[0])
+        # Continue searching through connected nodes
+        if socket.is_output and node.inputs:
+            result = get_linked_entity_node(node.inputs[0], visited)
+            if result:
+                return result
+        elif not socket.is_output and node.outputs:
+            result = get_linked_entity_node(node.outputs[0], visited)
+            if result:
+                return result
     
     return None
 
