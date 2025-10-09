@@ -1,5 +1,4 @@
-
-# ui_panels.py — Onto3D N‑Panel & geometry helpers
+# ui_panels.py – Onto3D N‑Panel & geometry helpers
 # ------------------------------------------------------------
 # Implements:
 #   - Info panel (shows active node's properties + buttons: Open IRI, Frame Selected, Isolate Selected)
@@ -69,7 +68,7 @@ def _objects_from_names(names):
 
 # Try to extract an IRI/URL from the node by common attribute or custom prop names,
 # or from sockets named 'IRI' (string).
-_POSSIBLE_IRI_ATTRS = ["iri", "IRI", "iri_value", "iri_url", "url", "iri_str", "onto3d_iri"]
+_POSSIBLE_IRI_ATTRS = ["iri", "IRI", "iri_value", "iri_url", "url", "iri_str", "onto3d_iri", "onto3d_url"]
 
 def _guess_iri_from_node(node):
     # 1) Python/RNA attributes
@@ -94,6 +93,32 @@ def _guess_iri_from_node(node):
     except Exception:
         pass
     return ""
+
+def _get_node_graph_name(node):
+    """Get the name of the node tree containing this node"""
+    try:
+        if hasattr(node, "id_data") and node.id_data:
+            return node.id_data.name
+    except Exception:
+        pass
+    return "Unknown Graph"
+
+def _get_entity_type_display(node):
+    """Get entity type for display (solo ultima parte, con spazi)"""
+    try:
+        entity_id = getattr(node, "onto3d_entity_id", "") or ""
+        if entity_id:
+            # Prendi solo l'ultima parte dopo l'ultimo /
+            short_id = entity_id.split('/')[-1]
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                return protege_to_blender_name(short_id)
+            except:
+                return short_id.replace('_', ' ')
+    except:
+        pass
+    return "Entity"
 
 # -----------------------
 # Operators
@@ -298,78 +323,6 @@ class ONTO3D_OT_FrameLinkedGeometry(Operator):
         except Exception as ex:
             _report(self, 'ERROR', f"Frame failed: {ex}")
             return {'CANCELLED'}
-        names = _read_links(node)
-        if not names:
-            _report(self, 'WARNING', "Active node has no linked geometry.")
-            return {'CANCELLED'}
-        obs = _objects_from_names(names)
-
-        # Ensure visible and selected
-        for ob in bpy.data.objects:
-            ob.select_set(False)
-        for ob in obs:
-            ob.hide_set(False)
-            ob.hide_viewport = False
-            ob.select_set(True)
-            context.view_layer.objects.active = ob
-
-        area, region = _find_3d_view_area_region_window(context.window.screen)
-        if not area or not region:
-            _report(self, 'ERROR', "No 3D View found to frame selection.")
-            return {'CANCELLED'}
-
-        override = {'window': context.window, 'screen': context.screen,
-                    'area': area, 'region': region, 'scene': context.scene,
-                    'view_layer': context.view_layer}
-        try:
-            bpy.ops.view3d.view_selected(override)
-            _report(self, 'INFO', "Framed linked geometry in 3D Viewport.")
-            return {'FINISHED'}
-        except Exception as ex:
-            _report(self, 'ERROR', f"Frame failed: {ex}")
-            return {'CANCELLED'}
-
-
-class ONTO3D_OT_IsolateLinkedGeometry(Operator):
-    """Isolate (show only) the geometry linked to the active node in the 3D Viewport"""
-    bl_idname = "onto3d.toggle_localview_linked"
-    bl_label = "Isolate Selected"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-        node = _active_node(context)
-        if not node:
-            _report(self, 'WARNING', "No active node selected.")
-            return {'CANCELLED'}
-        names = _read_links(node)
-        if not names:
-            _report(self, 'WARNING', "Active node has no linked geometry.")
-            return {'CANCELLED'}
-
-        # Hide all, show linked
-        for ob in bpy.data.objects:
-            ob.hide_set(True)
-        for name in names:
-            ob = bpy.data.objects.get(name)
-            if ob:
-                # Unhide the object and its parent hierarchy
-                p = ob
-                while p:
-                    p.hide_set(False)
-                    p = p.parent
-
-        area, region = _find_3d_view_area_region_window(context.window.screen)
-        if area and region:
-            override = {'window': context.window, 'screen': context.screen,
-                        'area': area, 'region': region, 'scene': context.scene,
-                        'view_layer': context.view_layer}
-            try:
-                # Optionally, frame after isolate
-                bpy.ops.view3d.view_selected(override)
-            except Exception:
-                pass
-        _report(self, 'INFO', "Isolation applied to linked geometry.")
-        return {'FINISHED'}
 
 
 class ONTO3D_OT_ToggleLocalViewLinked(Operator):
@@ -407,7 +360,7 @@ class ONTO3D_OT_ToggleLocalViewLinked(Operator):
 
         try:
             with context.temp_override(window=context.window, screen=context.screen, area=area, region=region, view_layer=context.view_layer, scene=context.scene):
-                # Toggle local view (no args to avoid signature mismatches across versions)
+                # Toggle local view
                 bpy.ops.view3d.localview()
                 # Optionally frame after toggling
                 try:
@@ -419,38 +372,7 @@ class ONTO3D_OT_ToggleLocalViewLinked(Operator):
         except Exception as ex:
             _report(self, 'ERROR', f"Local View toggle failed: {ex}")
             return {'CANCELLED'}
-        names = _read_links(node)
-        if not names:
-            _report(self, 'WARNING', "Active node has no linked geometry.")
-            return {'CANCELLED'}
-        obs = _objects_from_names(names)
-        if not obs:
-            _report(self, 'WARNING', "Linked geometry not found. Run Update Links.")
-            return {'CANCELLED'}
 
-        # select linked and ensure visible
-        for ob in bpy.data.objects:
-            ob.select_set(False)
-        for ob in obs:
-            ob.hide_set(False)
-            ob.select_set(True)
-            context.view_layer.objects.active = ob
-
-        # find a 3D view
-        area, region = _find_3d_view_area_region_window(context.window.screen)
-        if not area or not region:
-            _report(self, 'ERROR', "No 3D View found to toggle Local View.")
-            return {'CANCELLED'}
-        override = {'window': context.window, 'screen': context.screen,
-                    'area': area, 'region': region, 'scene': context.scene,
-                    'view_layer': context.view_layer}
-        try:
-            bpy.ops.view3d.localview(override, frame_selected=True)
-            _report(self, 'INFO', "Toggled Local View for linked geometry.")
-            return {'FINISHED'}
-        except Exception as ex:
-            _report(self, 'ERROR', f"Local View toggle failed: {ex}")
-            return {'CANCELLED'}
 
 # -----------------------
 # VIEW_3D Helpers
@@ -496,37 +418,108 @@ class ONTO3D_PT_Main(Panel):
             layout.label(text="No active node.", icon='INFO')
             return
 
-        # Header
-        header = layout.box()
-        header.label(text=f"Active Node: {node.name}", icon='NODE')
-        header.label(text=f"Type: {getattr(node, 'bl_idname', node.__class__.__name__)}")
-
-        # Open IRI
-        row = header.row(align=True)
-        row.operator("onto3d.open_iri", text="Open IRI", icon='URL')
-
-        # spacer + actions
-        header.separator()
-        row = header.row(align=True)
-        row.operator("onto3d.frame_linked_geometry", text="Frame Selected", icon='VIEW_ZOOM')
-        row.operator("onto3d.toggle_localview_linked", text="Isolate Selected", icon='HIDE_OFF')
-        
-
-        # Properties
         box = layout.box()
-        box.label(text="Properties")
-        # 1) Python-defined annotations (typical for custom nodes)
-        annotations = getattr(node.__class__, "__annotations__", {})
-        _skip = {"onto3d_links","onto3d_ontology","onto3d_entity_id","onto3d_property_id"}
-        for prop_name in annotations.keys():
-            if prop_name in _skip:
-                continue
+        
+        # --- 1. NODE TYPE (Entity type o Property type) ---
+        if node.bl_idname == "Onto3DNodeEntity":
+            entity_display = _get_entity_type_display(node)
+            box.label(text=entity_display, icon='NODE')
+        elif node.bl_idname == "Onto3DNodeProperty":
             try:
-                box.prop(node, prop_name)
-            except Exception:
+                from .rdf_utils import protege_to_blender_name
+                pid = getattr(node, "onto3d_property_id", "") or ""
+                if pid:
+                    short_id = pid.split('/')[-1] if '/' in pid else pid
+                    property_display = protege_to_blender_name(short_id)
+                else:
+                    property_display = "Property"
+                box.label(text=property_display, icon='LINKED')
+            except:
+                box.label(text="Property", icon='LINKED')
+        else:
+            box.label(text=getattr(node, 'bl_idname', node.__class__.__name__), icon='NODE')
+        
+        box.separator()
+        
+        # --- 2. TITLE (modificabile) ---
+        if hasattr(node, "onto3d_title"):
+            box.prop(node, "onto3d_title", text="Title")
+        
+        # --- 3. URL (modificabile con pulsante) ---
+        if hasattr(node, "onto3d_url"):
+            row = box.row(align=True)
+            row.prop(node, "onto3d_url", text="URL")
+            if node.onto3d_url.strip():
+                op = row.operator("onto3d.open_iri", text="", icon='URL')
+                op.iri = node.onto3d_url
+        
+        # --- 4. ONTOLOGY IRI (non modificabile, con pulsante) ---
+        ontology_slug = getattr(node, "onto3d_ontology", "")
+        if ontology_slug:
+            try:
+                from . import preferences_ontology
+                onto_reg = preferences_ontology.ONTO_REG
+                if ontology_slug in onto_reg:
+                    ontology_data = onto_reg[ontology_slug]
+                    base_uri = ontology_data.get("base", "")
+                    
+                    if base_uri:
+                        box.separator()
+                        # Label con IRI
+                        col = box.column(align=True)
+                        col.label(text="Ontology IRI:", icon='WORLD')
+                        # Mostra IRI (troncato se troppo lungo)
+                        display_uri = base_uri if len(base_uri) <= 50 else base_uri[:47] + "..."
+                        col.label(text=display_uri)
+                        
+                        # Pulsante per aprire nel browser
+                        op = col.operator("onto3d.open_iri", text="View Documentation", icon='URL')
+                        op.iri = base_uri
+            except:
                 pass
-
-        # Linked objects (simple, non-interactive list will be drawn in Connect Geometry section)
+        
+        # --- 5. ACTIONS (Frame e Isolate) - solo se ci sono geometrie linkate ---
+        names = _read_links(node)
+        if names:
+            box.separator()
+            row = box.row(align=True)
+            row.operator("onto3d.frame_linked_geometry", text="Frame", icon='VIEWZOOM')
+            row.operator("onto3d.toggle_localview_linked", text="Isolate", icon='HIDE_OFF')
+            
+            # --- 6. LINKED GEOMETRY LIST ---
+            box.separator()
+            # Warn if some links are missing
+            missing = [n for n in names if n not in bpy.data.objects]
+            if missing:
+                box.label(text=f"{len(missing)} missing — run Update Links", icon='ERROR')
+            box.label(text=f"Linked Geometry ({len(names)})", icon='LINKED')
+            for n in sorted(names):
+                ob = bpy.data.objects.get(n)
+                if ob:
+                    # Usa l'icona appropriata per il tipo di oggetto
+                    icon_map = {
+                        'MESH': 'OUTLINER_OB_MESH',
+                        'CURVE': 'OUTLINER_OB_CURVE',
+                        'SURFACE': 'OUTLINER_OB_SURFACE',
+                        'META': 'OUTLINER_OB_META',
+                        'FONT': 'OUTLINER_OB_FONT',
+                        'CURVES': 'OUTLINER_OB_CURVES',
+                        'POINTCLOUD': 'OUTLINER_OB_POINTCLOUD',
+                        'VOLUME': 'OUTLINER_OB_VOLUME',
+                        'GPENCIL': 'OUTLINER_OB_GREASEPENCIL',
+                        'ARMATURE': 'OUTLINER_OB_ARMATURE',
+                        'LATTICE': 'OUTLINER_OB_LATTICE',
+                        'EMPTY': 'OUTLINER_OB_EMPTY',
+                        'LIGHT': 'OUTLINER_OB_LIGHT',
+                        'LIGHT_PROBE': 'OUTLINER_OB_LIGHTPROBE',
+                        'CAMERA': 'OUTLINER_OB_CAMERA',
+                        'SPEAKER': 'OUTLINER_OB_SPEAKER',
+                    }
+                    icon = icon_map.get(ob.type, 'OBJECT_DATA')
+                    box.label(text=n, icon=icon)
+                else:
+                    # Oggetto mancante
+                    box.label(text=f"{n} (missing)", icon='QUESTION')
 
 
 class ONTO3D_PT_ConnectGeometry(Panel):
@@ -544,38 +537,188 @@ class ONTO3D_PT_ConnectGeometry(Panel):
         node = _active_node(context)
 
         col = layout.column(align=True)
-        col.label(text="Link the active node to selected objects in 3D.", icon='LINKED')
-        col.label(text="You can link multiple objects (including children of Empties).")
-
-        row = col.row(align=True)
-        op = row.operator("onto3d.create_connection", text="Create Connection", icon='PLUS')
-        op.include_children = True
-        row = col.row(align=True)
-        row.operator("onto3d.break_connection", text="Break (Selected)", icon='X').clear_all_for_node = False
-        row.operator("onto3d.break_connection", text="Break ALL", icon='TRASH').clear_all_for_node = True
-        col.operator("onto3d.update_connections", text="Update Links", icon='FILE_REFRESH')
-
+        col.scale_y = 0.8
+        col.label(text="Link the active node to", icon='LINKED')
+        col.label(text="selected objects in 3D.")
+        col.label(text="You can link multiple objects")
+        col.label(text="(including children of Empties).")
+        
         layout.separator()
 
-        # Simple list of linked geometry (non-interactive)
-        if node:
-            names = sorted(list(_read_links(node)))
-            box = layout.box()
-            # Warn if some links are missing
-            missing = [n for n in names if n not in bpy.data.objects]
-            if missing:
-                box.label(text=f"{len(missing)} missing — run Update Links", icon='ERROR')
-            box.label(text=f"Linked Geometry ({len(names)})")
-            for n in names:
-                prefix = "• "
-                box.label(text=f"{prefix}{n}")
+        row = layout.row(align=True)
+        op = row.operator("onto3d.create_connection", text="Create Connection", icon='PLUS')
+        op.include_children = True
+        row = layout.row(align=True)
+        row.operator("onto3d.break_connection", text="Break (Selected)", icon='X').clear_all_for_node = False
+        row.operator("onto3d.break_connection", text="Break ALL", icon='TRASH').clear_all_for_node = True
+        layout.operator("onto3d.update_connections", text="Update Links", icon='FILE_REFRESH')
+
+
+class ONTO3D_OT_CollapseAllNodes(Operator):
+    """Collapse all nodes in the graph to show only connections"""
+    bl_idname = "onto3d.collapse_all_nodes"
+    bl_label = "Collapse All"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        space = getattr(context, "space_data", None)
+        if not space or space.type != 'NODE_EDITOR':
+            _report(self, 'ERROR', "Open a Node Editor")
+            return {'CANCELLED'}
+        
+        node_tree = space.edit_tree or space.node_tree
+        if not node_tree:
+            _report(self, 'ERROR', "No node tree active")
+            return {'CANCELLED'}
+        
+        count = 0
+        for node in node_tree.nodes:
+            if hasattr(node, 'hide') and not node.hide:
+                node.hide = True
+                count += 1
+        
+        _report(self, 'INFO', f"Collapsed {count} nodes")
+        return {'FINISHED'}
+
+
+class ONTO3D_OT_ExpandAllNodes(Operator):
+    """Expand all nodes in the graph to show full details"""
+    bl_idname = "onto3d.expand_all_nodes"
+    bl_label = "Expand All"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        space = getattr(context, "space_data", None)
+        if not space or space.type != 'NODE_EDITOR':
+            _report(self, 'ERROR', "Open a Node Editor")
+            return {'CANCELLED'}
+        
+        node_tree = space.edit_tree or space.node_tree
+        if not node_tree:
+            _report(self, 'ERROR', "No node tree active")
+            return {'CANCELLED'}
+        
+        count = 0
+        for node in node_tree.nodes:
+            if hasattr(node, 'hide') and node.hide:
+                node.hide = False
+                count += 1
+        
+        _report(self, 'INFO', f"Expanded {count} nodes")
+        return {'FINISHED'}
+
+
+class ONTO3D_PT_GraphManagement(Panel):
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = 'Onto3D'
+    bl_label = 'Graph Management'
+
+    @classmethod
+    def poll(cls, context):
+        return _is_node_editor(context)
+
+    def draw(self, context):
+        layout = self.layout
+        
+        # --- COLLAPSE / EXPAND ---
+        col = layout.column(align=True)
+        col.scale_y = 0.8
+        col.label(text="Toggle node visibility to better", icon='HIDE_OFF')
+        col.label(text="understand graph structure.")
+        
+        layout.separator()
+        
+        row = layout.row(align=True)
+        row.operator("onto3d.collapse_all_nodes", text="Collapse", icon='FULLSCREEN_EXIT')
+        row.operator("onto3d.expand_all_nodes", text="Expand", icon='FULLSCREEN_ENTER')
+        
+        # --- AUTO-LAYOUT ---
+        layout.separator()
+        layout.separator()
+        
+        space = getattr(context, "space_data", None)
+        node_tree = None
+        if space and space.type == 'NODE_EDITOR':
+            node_tree = space.edit_tree or space.node_tree
+        
+        if node_tree and node_tree.nodes:
+            try:
+                from .graph_layout import estimate_graph_complexity
+                suggested = estimate_graph_complexity(node_tree)
+                
+                col = layout.column(align=True)
+                col.scale_y = 0.8
+                col.label(text="Automatically arrange nodes", icon='STICKY_UVS_LOC')
+                col.label(text="using graph layout algorithms.")
+                
+                layout.separator()
+                
+                # Show suggested algorithm if it's one we support
+                if suggested in ('hierarchical', 'grid'):
+                    box = layout.box()
+                    box.label(text=f"Suggested: {suggested.title()}", icon='INFO')
+                
+                row = layout.row(align=True)
+                op = row.operator("onto3d.auto_layout", text="Hierarchical", icon='OUTLINER')
+                op.algorithm = 'hierarchical'
+                op = row.operator("onto3d.auto_layout", text="Grid", icon='GRID')
+                op.algorithm = 'grid'
+            except ImportError:
+                col = layout.column(align=True)
+                col.label(text="Auto-layout available", icon='INFO')
+                col.label(text="in Import/Export panel")
         else:
-            layout.label(text="No active node.", icon='INFO')
+            col = layout.column(align=True)
+            col.scale_y = 0.8
+            col.label(text="No nodes to layout", icon='INFO')
 
 
-# -----------------------
-# Registration
-# -----------------------
+class ONTO3D_OT_AutoLayout(Operator):
+    """Automatically arrange nodes using graph layout algorithm"""
+    bl_idname = "onto3d.auto_layout"
+    bl_label = "Auto Layout Nodes"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    algorithm: StringProperty(
+        name="Algorithm",
+        description="Layout algorithm to use",
+        default='hierarchical'
+    )
+    
+    spacing: bpy.props.IntProperty(
+        name="Spacing",
+        description="Distance between nodes",
+        default=400,
+        min=100,
+        max=2000
+    )
+    
+    def execute(self, context):
+        space = getattr(context, "space_data", None)
+        if not space or space.type != 'NODE_EDITOR':
+            self.report({'ERROR'}, "Open a Node Editor")
+            return {'CANCELLED'}
+        
+        node_tree = space.edit_tree or space.node_tree
+        if not node_tree:
+            self.report({'ERROR'}, "No node tree active")
+            return {'CANCELLED'}
+        
+        if not node_tree.nodes:
+            self.report({'WARNING'}, "No nodes to layout")
+            return {'CANCELLED'}
+        
+        try:
+            from .graph_layout import auto_layout_nodes
+            auto_layout_nodes(node_tree, algorithm=self.algorithm, spacing=self.spacing)
+            self.report({'INFO'}, f"Applied {self.algorithm} layout")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Layout failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'CANCELLED'}
 
 
 class ONTO3D_OT_FrameLinkedNode(Operator):
@@ -631,8 +774,8 @@ class ONTO3D_OT_FrameLinkedNode(Operator):
         return {'FINISHED'}
 
 
-
 class ONTO3D_PT_View3D_Info(Panel):
+    """Pannello 3D Viewport che mostra info del nodo linkato all'oggetto attivo"""
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Onto3D'
@@ -645,40 +788,58 @@ class ONTO3D_PT_View3D_Info(Panel):
     def draw(self, context):
         layout = self.layout
         ob = context.active_object
+        
         if not ob:
             layout.label(text="No active object.", icon='INFO')
             return
+            
         node, ntree = _node_by_object_link(ob)
         if not node:
             layout.label(text="No linked node for active object.", icon='INFO')
             return
 
+        # --- PRIMO BOX: Graph Info ---
         box = layout.box()
-        box.label(text=f"Linked Node: {node.name}", icon='NODE')
-        box.label(text=f"Tree: {ntree.name if ntree else '-'}")
-
-        # Properties (same policy as Node Editor Info)
-        props_box = layout.box()
-        props_box.label(text="Properties")
-        annotations = getattr(node.__class__, "__annotations__", {})
-        _skip = {"onto3d_links","onto3d_ontology","onto3d_entity_id","onto3d_property_id"}
-        for prop_name in annotations.keys():
-            if prop_name in _skip:
-                continue
-            try:
-                props_box.prop(node, prop_name)
-            except Exception:
-                pass
-
-        # Action: frame linked node in Node Editor (.) — requested custom action for 3D N-panel
-        layout.separator()
-                # Quick action: Open IRI of the linked node
+        
+        # Node Graph: nome del grafo (icona NODETREE come nel Node Editor)
+        graph_name = _get_node_graph_name(node)
+        box.label(text=f"Node Graph: {graph_name}", icon='NODETREE')
+        
+        # Entity type (solo ultima parte, con spazi) - icona NODE come sul nodo
+        entity_display = _get_entity_type_display(node)
+        box.label(text=entity_display, icon='NODE')
+        
+        box.separator()
+        
+        # Proprietà Title (non Label)
+        if hasattr(node, "onto3d_title"):
+            box.prop(node, "onto3d_title", text="Title")
+        
+        # Proprietà URL (non IRI)
         iri_val = _guess_iri_from_node(node)
-        row = layout.row(align=True)
-        op = row.operator("onto3d.open_iri", text="Open IRI", icon='URL')
-        op.iri = iri_val or ""
-                # Quick action: Open IRI of the linked node
+        if hasattr(node, "onto3d_url"):
+            row = box.row(align=True)
+            row.prop(node, "onto3d_url", text="URL")
+            if node.onto3d_url.strip():
+                op = row.operator("onto3d.open_iri", text="", icon='URL')
+                op.iri = node.onto3d_url
+        elif iri_val:
+            # Fallback: mostra URL trovato con guess e bottone
+            row = box.row(align=True)
+            row.label(text=f"URL: {iri_val[:30]}...")
+            op = row.operator("onto3d.open_iri", text="", icon='URL')
+            op.iri = iri_val
 
+        # --- SECONDO BOX: Actions ---
+        box = layout.box()
+        
+        # Pulsante Zoom to Graph
+        box.operator("onto3d.frame_linked_node", text="Zoom to Graph", icon='VIEWZOOM')
+
+
+# -----------------------
+# Registration
+# -----------------------
 
 _CLASSES = (
     ONTO3D_OT_OpenIRI,
@@ -686,11 +847,14 @@ _CLASSES = (
     ONTO3D_OT_BreakConnection,
     ONTO3D_OT_UpdateConnections,
     ONTO3D_OT_FrameLinkedGeometry,
-    
+    ONTO3D_OT_ToggleLocalViewLinked,
+    ONTO3D_OT_CollapseAllNodes,
+    ONTO3D_OT_ExpandAllNodes,
+    ONTO3D_OT_AutoLayout,
+    ONTO3D_OT_FrameLinkedNode,
     ONTO3D_PT_Main,
     ONTO3D_PT_ConnectGeometry,
-    ONTO3D_OT_ToggleLocalViewLinked,
-    ONTO3D_OT_FrameLinkedNode,
+    ONTO3D_PT_GraphManagement,
     ONTO3D_PT_View3D_Info,
 )
 

@@ -4,10 +4,13 @@ from bpy.props import StringProperty, BoolProperty, CollectionProperty, EnumProp
 from nodeitems_utils import NodeCategory, NodeItem, register_node_categories, unregister_node_categories
 import os, json
 
-# Default (fallback) ids – verranno sovrascritti se troviamo le classi registrate
+# Import RDF parsing from rdf_utils
+from .rdf_utils import parse_ontology_file
+
+# Default (fallback) ids
 ENTITY_NODE_ID_DEFAULT   = "Onto3DNodeEntity"
 PROPERTY_NODE_ID_DEFAULT = "Onto3DNodeProperty"
-TREE_TYPE_ID             = "Onto3DNodeTree"  # se serve, adatta al tuo NodeTree
+TREE_TYPE_ID             = "Onto3DNodeTree"
 
 def _resolve_node_ids():
     import bpy
@@ -21,81 +24,15 @@ def _poll_onto3d(context):
         return False
     return getattr(space, "tree_type", "") == TREE_TYPE_ID
 
-def _parse_ttl_or_owl_any(path_or_url: str, is_url: bool = False):
-    try:
-        import rdflib
-        from rdflib.namespace import RDF, RDFS, OWL, SKOS
-    except Exception as e:
-        raise RuntimeError("rdflib is not installed or not available in Blender's environment") from e
-
-    g = rdflib.Graph()
-    # rdflib capisce da solo il formato nella maggior parte dei casi; lasciamo a lui il detection.
-    g.parse(path_or_url)
-
-    def _label_for(node):
-        # prova rdfs:label, poi skos:prefLabel, se nulla usa localname dell'URI
-        lbl = g.value(node, RDFS.label)
-        if lbl:
-            return str(lbl)
-        lbl = g.value(node, SKOS.prefLabel)
-        if lbl:
-            return str(lbl)
-        # localname fallback
-        try:
-            s = str(node)
-            for sep in ['#', '/', ':']:
-                if sep in s:
-                    s = s.rsplit(sep, 1)[-1]
-            return s
-        except Exception:
-            return str(node)
-
-    entities = []
-    properties = []
-
-    # --- Classi ---
-    seen_classes = set()
-    for s in g.subjects(RDF.type, RDFS.Class):
-        sid = str(s)
-        if sid in seen_classes: 
-            continue
-        entities.append((sid, _label_for(s), ""))  # ns vuoto: opzionale
-        seen_classes.add(sid)
-
-    for s in g.subjects(RDF.type, OWL.Class):
-        sid = str(s)
-        if sid in seen_classes:
-            continue
-        entities.append((sid, _label_for(s), ""))
-        seen_classes.add(sid)
-
-    # --- Proprietà ---
-    seen_props = set()
-    for s in g.subjects(RDF.type, RDF.Property):
-        pid = str(s)
-        if pid in seen_props:
-            continue
-        properties.append((pid, _label_for(s), ""))
-        seen_props.add(pid)
-
-    for ptype in (OWL.ObjectProperty, OWL.DatatypeProperty, OWL.AnnotationProperty):
-        for s in g.subjects(RDF.type, ptype):
-            pid = str(s)
-            if pid in seen_props:
-                continue
-            properties.append((pid, _label_for(s), ""))
-            seen_props.add(pid)
-
-    return entities, properties
-
 # =========================
-# Public API (what your __init__.py will call)
+# Public API
 # =========================
 def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
     _ensure_node_props()
-    _load_from_prefs_and_build()
+    # Use app handler to load after Blender is fully initialized
+    bpy.app.timers.register(_delayed_load, first_interval=0.1)
 
 def unregister():
     _unregister_all_categories()
@@ -108,8 +45,8 @@ def unregister():
 # =========================
 # Internal state
 # =========================
-ONTO_REG = {}             # { slug: {"name": str, "prefix": str, "entities": [(id,label,ns)], "properties": [...] } }
-_NODE_CAT_IDS = set()     # Track registered NodeCategory identifiers
+ONTO_REG = {}
+_NODE_CAT_IDS = set()
 
 def _slugify(s: str) -> str:
     return "".join(c.lower() if c.isalnum() else "_" for c in s).strip("_")
@@ -122,14 +59,16 @@ class ONTO3D_PG_Ontology(PropertyGroup):
     slug: StringProperty(name="Slug", description="Unique id (e.g. crm, cra, crmsci)", default="")
     source_type: EnumProperty(
         name="Source",
-        items=[('FILE',"File","Local file"), ('URL',"URL","Remote URL"), ('BUILTIN',"Built-in","Code preset")],
+        items=[
+            ('FILE', "File", "Local ontology file (.ttl, .owl, .rdf, .json)"),
+            ('URL', "URL", "Remote ontology file URL")
+        ],
         default='FILE'
     )
     path: StringProperty(name="Path / URL", subtype='FILE_PATH', description="File path (JSON-LD/TTL/OWL) or URL")
     prefix: StringProperty(name="Prefix", description="Shown in Add menu labels, e.g. CRM, CRA", default="")
     enabled: BoolProperty(name="Enabled", default=True)
 
-# Save the parsed data as a JSON string (persists in preferences)
     cached_data: StringProperty(
         name="Cached Data",
         description="Parsed ontology data (JSON)",
@@ -137,15 +76,38 @@ class ONTO3D_PG_Ontology(PropertyGroup):
     )
 
 class ONTO3D_Preferences(AddonPreferences):
-    bl_idname = __package__ if __package__ else __name__
+    bl_idname = __package__.split('.')[0] if '.' in __package__ else __package__
 
     ontologies: CollectionProperty(type=ONTO3D_PG_Ontology)
     active_index: IntProperty(default=0)
 
     def draw(self, context):
         layout = self.layout
+        
+        # Header
         col = layout.column()
-        col.label(text="Ontologies", icon='BOOKMARKS')
+        header = col.box()
+        header.label(text="Import Ontologies", icon='IMPORT')
+        
+        # Instructions
+        instructions = col.box()
+        instructions.label(text="How to import ontologies:", icon='INFO')
+        instr_col = instructions.column(align=True)
+        instr_col.scale_y = 0.8
+        instr_col.label(text="1. Click 'Add' to create a new ontology entry")
+        instr_col.label(text="2. Set a name, slug (unique ID), and prefix for the menu")
+        instr_col.label(text="3. Choose source type: File (local .ttl/.owl/.rdf) or URL")
+        instr_col.label(text="4. Select the file path or enter the URL")
+        instr_col.label(text="5. Click 'Reload Selected' to load the ontology")
+        instr_col.label(text="6. Enable/disable ontologies using the checkbox")
+        instr_col.label(text="7. Preferences are saved automatically with Blender")
+        instr_col.label(text="Tip: Use 'Reload All' to refresh all enabled ontologies")
+        
+        layout.separator()
+        
+        # Ontology list
+        col = layout.column()
+        col.label(text="Loaded Ontologies:", icon='BOOKMARKS')
         row = col.row()
         row.template_list("ONTO3D_UL_Ontologies", "", self, "ontologies", self, "active_index", rows=4)
 
@@ -170,7 +132,6 @@ class ONTO3D_Preferences(AddonPreferences):
             elif item.source_type == 'URL':
                 box.prop(item, "path", text="URL")
             
-            #Show cache status
             if item.cached_data:
                 box.label(text="✓ Cached", icon='CHECKMARK')
                 box.operator("onto3d.ontology_clear_cache", icon='TRASH')
@@ -192,20 +153,28 @@ class ONTO3D_UL_Ontologies(UIList):
 # Operators
 # =========================
 class ONTO3D_OT_OntologyAdd(Operator):
-    bl_idname = "onto3d.ontology_add"; bl_label = "Add Ontology"
+    """Add a new ontology to the list"""
+    bl_idname = "onto3d.ontology_add"
+    bl_label = "Add Ontology"
+    bl_description = "Add a new ontology entry to import"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        prefs = _get_prefs()
         item = prefs.ontologies.add()
         item.name = "New ontology"
-        context.preferences.addons[__package__ if __package__ else __name__].preferences.active_index = len(prefs.ontologies) - 1
+        prefs.active_index = len(prefs.ontologies) - 1
+        # Save preferences
+        _save_preferences()
         return {'FINISHED'}
 
 class ONTO3D_OT_OntologyRemove(Operator):
-    bl_idname = "onto3d.ontology_remove"; bl_label = "Remove Ontology"
+    """Remove the selected ontology from the list"""
+    bl_idname = "onto3d.ontology_remove"
+    bl_label = "Remove Ontology"
+    bl_description = "Remove the selected ontology and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        prefs = _get_prefs()
         idx = prefs.active_index
         if 0 <= idx < len(prefs.ontologies):
             slug = prefs.ontologies[idx].slug.strip() or _slugify(prefs.ontologies[idx].name)
@@ -213,33 +182,48 @@ class ONTO3D_OT_OntologyRemove(Operator):
             prefs.ontologies.remove(idx)
             prefs.active_index = min(idx, len(prefs.ontologies)-1)
             _rebuild_node_categories()
+            # Save preferences
+            _save_preferences()
             self.report({'INFO'}, "Ontology removed and node menu rebuilt")
         return {'FINISHED'}
 
 class ONTO3D_OT_OntologyReloadOne(Operator):
-    bl_idname = "onto3d.ontology_reload_one"; bl_label = "Reload Selected Ontology"
+    """Reload the selected ontology from its source file/URL"""
+    bl_idname = "onto3d.ontology_reload_one"
+    bl_label = "Reload Selected"
+    bl_description = "Reload the selected ontology from source and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        prefs = _get_prefs()
         if not (0 <= prefs.active_index < len(prefs.ontologies)):
             return {'CANCELLED'}
         _load_enabled_ontologies(prefs, only_index=prefs.active_index)
         _rebuild_node_categories()
+        # Save preferences
+        _save_preferences()
         self.report({'INFO'}, "Ontology reloaded")
         return {'FINISHED'}
 
 class ONTO3D_OT_OntologyReloadAll(Operator):
-    bl_idname = "onto3d.ontology_reload_all"; bl_label = "Reload All Ontologies"
+    """Reload all enabled ontologies from their source files/URLs"""
+    bl_idname = "onto3d.ontology_reload_all"
+    bl_label = "Reload All"
+    bl_description = "Reload all enabled ontologies from source and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        prefs = _get_prefs()
         _load_enabled_ontologies(prefs)
         _rebuild_node_categories()
+        # Save preferences
+        _save_preferences()
         self.report({'INFO'}, "All ontologies reloaded")
         return {'FINISHED'}
 
 class ONTO3D_OT_RebuildNodeMenu(Operator):
-    bl_idname = "onto3d.ontology_rebuild_categories"; bl_label = "Rebuild Node Menu"
+    """Rebuild the Add menu without reloading ontology files"""
+    bl_idname = "onto3d.ontology_rebuild_categories"
+    bl_label = "Rebuild Node Menu"
+    bl_description = "Rebuild the node Add menu using cached ontology data (faster than reload)"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
         _rebuild_node_categories()
@@ -247,75 +231,98 @@ class ONTO3D_OT_RebuildNodeMenu(Operator):
         return {'FINISHED'}
 
 class ONTO3D_OT_OntologyClearCache(Operator):
+    """Clear the cached data for this ontology and force reload from source"""
     bl_idname = "onto3d.ontology_clear_cache"
     bl_label = "Clear Cache"
-    bl_description = "Force reload from source on next startup"
+    bl_description = "Clear cached ontology data and force reload from source file/URL on next reload"
     bl_options = {'REGISTER', 'INTERNAL'}
     
     def execute(self, context):
-        prefs = context.preferences.addons[__package__ if __package__ else __name__].preferences
+        prefs = _get_prefs()
         if 0 <= prefs.active_index < len(prefs.ontologies):
             prefs.ontologies[prefs.active_index].cached_data = ""
-            self.report({'INFO'}, "Cache cleared. Reload to re-parse from source.")
+            # Save preferences
+            _save_preferences()
+            self.report({'INFO'}, "Cache cleared. Click 'Reload Selected' to re-parse from source.")
         return {'FINISHED'}
     
+# =========================
+# Utility functions
+# =========================
+def _get_prefs():
+    """Get addon preferences safely"""
+    try:
+        addon_name = __package__.split('.')[0] if '.' in __package__ else __package__
+        return bpy.context.preferences.addons[addon_name].preferences
+    except Exception as e:
+        print(f"[Onto3D] Error getting preferences: {e}")
+        return None
+
+def _save_preferences():
+    """Force save user preferences to disk"""
+    try:
+        bpy.ops.wm.save_userpref()
+    except Exception as e:
+        print(f"[Onto3D] Warning: Could not save preferences: {e}")
+
 # =========================
 # Parse / Load
 # =========================
 def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
+    """Parse ontology from source (file or URL)"""
     slug = (item.slug.strip() or _slugify(item.name))[:32]
     prefix = item.prefix.strip() or slug.upper()
     entities, properties = [], []
 
-    if item.source_type == 'BUILTIN' and not item.path:
-        # Simple example builtin
-        entities = [("E22_Man-Made_Object", "E22 Man-Made Object", "crm"),
-                    ("E39_Actor", "E39 Actor", "crm")]
-        properties = [("P46_is_composed_of", "P46 is composed of", "crm")]
-    else:
-        if item.source_type == 'FILE':
-            path = bpy.path.abspath(item.path)
-            if not os.path.exists(path):
-                raise FileNotFoundError(path)
+    if item.source_type == 'FILE':
+        path = bpy.path.abspath(item.path)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"File not found: {path}")
 
-            lower = path.lower()
-            if lower.endswith((".json", ".jsonld")):
-                with open(path, "r", encoding="utf-8") as f:
+        lower = path.lower()
+        if lower.endswith((".json", ".jsonld")):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) 
+                       for e in data.get("entities", [])]
+            properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) 
+                         for p in data.get("properties", [])]
+        else:
+            entities, properties = parse_ontology_file(path, is_url=False)
+
+    elif item.source_type == 'URL':
+        url = (item.path or "").strip()
+        if not url:
+            raise ValueError("URL cannot be empty")
+        lower = url.lower()
+        if lower.endswith((".json", ".jsonld")):
+            import urllib.request, tempfile
+            fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(lower)[1] or ".json")
+            os.close(fd)
+            try:
+                urllib.request.urlretrieve(url, tmp_path)
+                with open(tmp_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) for e in data.get("entities", [])]
-                properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) for p in data.get("properties", [])]
-            else:
-                # RDF/XML (.rdf), TTL (.ttl), OWL (.owl), anche JSON-LD complesso: usa rdflib
-                entities, properties = _parse_ttl_or_owl_any(path, is_url=False)
-
-        elif item.source_type == 'URL':
-            url = (item.path or "").strip()
-            if not url:
-                raise ValueError("Empty URL")
-            lower = url.lower()
-            if lower.endswith((".json", ".jsonld")):
-                # scarica JSON e parse semplice
-                import urllib.request, tempfile
-                fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(lower)[1] or ".json")
-                os.close(fd)
+                entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) 
+                           for e in data.get("entities", [])]
+                properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) 
+                             for p in data.get("properties", [])]
+            finally:
                 try:
-                    urllib.request.urlretrieve(url, tmp_path)
-                    with open(tmp_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    entities = [(e.get("id", ""), e.get("label", e.get("id", "")), e.get("ns", "")) for e in data.get("entities", [])]
-                    properties = [(p.get("id", ""), p.get("label", p.get("id", "")), p.get("ns", "")) for p in data.get("properties", [])]
-                finally:
-                    try:
-                        os.remove(tmp_path)
-                    except Exception:
-                        pass
-            else:
-                # lascia che rdflib faccia il fetch/parsing direttamente dall’URL (supporta http/https/file)
-                entities, properties = _parse_ttl_or_owl_any(url, is_url=True)
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+        else:
+            entities, properties = parse_ontology_file(url, is_url=True)
 
     return {"name": item.name.strip() or slug, "prefix": prefix, "entities": entities, "properties": properties}
 
-def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
+
+def _load_enabled_ontologies(prefs, only_index=None):
+    """Load ontologies from preferences, using cache when available"""
+    if not prefs:
+        return
+        
     targets = range(len(prefs.ontologies)) if only_index is None else [only_index]
     for i in targets:
         it = prefs.ontologies[i]
@@ -324,7 +331,6 @@ def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
             ONTO_REG.pop(slug, None)
             continue
 
-        # try to load from cache
         if it.cached_data:
             try:
                 cached = json.loads(it.cached_data)
@@ -333,10 +339,8 @@ def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
             except Exception as e:
                 print(f"[Onto3D] Cache corrupted for '{it.name}', reloading: {e}")
 
-        # if cache cannot be found or is corrupted, parse from source
         try:
             model = _parse_ontology_from_source(it)
-            # save to cache
             it.cached_data = json.dumps({
                 "name": model["name"],
                 "prefix": model["prefix"],
@@ -375,24 +379,47 @@ def _rebuild_node_categories():
     for slug, data in ONTO_REG.items():
         pre = data["prefix"]
         ent_items, prop_items = [], []
+        
         for eid, elab, ns in data["entities"]:
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = eid.split('/')[-1] if '/' in eid else eid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
             ent_items.append(NodeItem(
                 ENTITY_NODE_ID,
-                label=f"[{pre}] {elab}",
+                label=f"[{pre}] {display_label}",
                 settings={
                     "onto3d_ontology": repr(slug),
                     "onto3d_entity_id": repr(eid),
                 }
             ))
+        
         for pid, plab, ns in data["properties"]:
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = pid.split('/')[-1] if '/' in pid else pid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
             prop_items.append(NodeItem(
                 PROPERTY_NODE_ID,
-                label=f"[{pre}] {plab}",
+                label=f"[{pre}] {display_label}",
                 settings={
                     "onto3d_ontology": repr(slug),
                     "onto3d_property_id": repr(pid),
                 }
             ))
+        
         if ent_items:
             cid = f"ONTO3D_ENT_{slug}"
             cat_defs.append(NodeCategory(cid, f"Onto3D • {data['name']} • Entities", items=ent_items))
@@ -402,19 +429,51 @@ def _rebuild_node_categories():
             cat_defs.append(NodeCategory(cid, f"Onto3D • {data['name']} • Properties", items=prop_items))
             _NODE_CAT_IDS.add(cid)
 
-    # "All"
+    # "All" categories
     all_ent, all_prop = [], []
     for slug, data in ONTO_REG.items():
         pre = data["prefix"]
+        
         for eid, elab, ns in data["entities"]:
-            all_ent.append(NodeItem(ENTITY_NODE_ID, label=f"[{pre}] {elab}", settings={
-                "onto3d_ontology": repr(slug), "onto3d_entity_id": repr(eid)
-            }))
-        for pid, plab, ns in data["properties"]:
-            all_prop.append(NodeItem(PROPERTY_NODE_ID,
-                label=f"[{pre}] {plab}",
-                settings={"onto3d_ontology": repr(slug), "onto3d_property_id": repr(pid)}
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = eid.split('/')[-1] if '/' in eid else eid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
+            all_ent.append(NodeItem(
+                ENTITY_NODE_ID, 
+                label=f"[{pre}] {display_label}", 
+                settings={
+                    "onto3d_ontology": repr(slug), 
+                    "onto3d_entity_id": repr(eid)
+                }
             ))
+        
+        for pid, plab, ns in data["properties"]:
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = pid.split('/')[-1] if '/' in pid else pid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
+            all_prop.append(NodeItem(
+                PROPERTY_NODE_ID,
+                label=f"[{pre}] {display_label}",
+                settings={
+                    "onto3d_ontology": repr(slug), 
+                    "onto3d_property_id": repr(pid)
+                }
+            ))
+    
     if all_ent:
         cid = "ONTO3D_ENT_ALL"
         cat_defs.insert(0, NodeCategory(cid, "Onto3D • All • Entities", items=all_ent))
@@ -428,10 +487,9 @@ def _rebuild_node_categories():
         register_node_categories(cat.identifier, [cat])
 
 # =========================
-# Ensure node properties exist on your node classes
+# Ensure node properties exist
 # =========================
 def _ensure_node_props():
-    # This does NOT create your nodes. It only ensures the props exist.
     try:
         ncls = bpy.types.Onto3DNodeEntity
         if not hasattr(ncls, "onto3d_ontology"):
@@ -450,12 +508,22 @@ def _ensure_node_props():
         pass
 
 # =========================
-# Load from prefs on startup
+# Load from prefs on startup (delayed)
 # =========================
-def _load_from_prefs_and_build():
-    prefs = bpy.context.preferences.addons[__package__ if __package__ else __name__].preferences
-    _load_enabled_ontologies(prefs)
-    _rebuild_node_categories()
+def _delayed_load():
+    """Load ontologies from preferences after Blender is initialized"""
+    try:
+        prefs = _get_prefs()
+        if prefs:
+            print("[Onto3D] Loading ontologies from preferences...")
+            _load_enabled_ontologies(prefs)
+            _rebuild_node_categories()
+            print(f"[Onto3D] Loaded {len(ONTO_REG)} ontologies")
+    except Exception as e:
+        print(f"[Onto3D] Error during delayed load: {e}")
+        import traceback
+        traceback.print_exc()
+    return None  # Don't repeat
 
 # =========================
 # Class registry
