@@ -348,9 +348,19 @@ def _rebuild_node_categories():
         ent_items, prop_items = [], []
         
         for eid, elab, ns in data["entities"]:
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = eid.split('/')[-1] if '/' in eid else eid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
             ent_items.append(NodeItem(
                 ENTITY_NODE_ID,
-                label=f"[{pre}] {elab}",
+                label=f"[{pre}] {display_label}",
                 settings={
                     "onto3d_ontology": repr(slug),
                     "onto3d_entity_id": repr(eid),
@@ -358,9 +368,19 @@ def _rebuild_node_categories():
             ))
         
         for pid, plab, ns in data["properties"]:
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = pid.split('/')[-1] if '/' in pid else pid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
             prop_items.append(NodeItem(
                 PROPERTY_NODE_ID,
-                label=f"[{pre}] {plab}",
+                label=f"[{pre}] {display_label}",
                 settings={
                     "onto3d_ontology": repr(slug),
                     "onto3d_property_id": repr(pid),
@@ -380,15 +400,45 @@ def _rebuild_node_categories():
     all_ent, all_prop = [], []
     for slug, data in ONTO_REG.items():
         pre = data["prefix"]
+        
         for eid, elab, ns in data["entities"]:
-            all_ent.append(NodeItem(ENTITY_NODE_ID, label=f"[{pre}] {elab}", settings={
-                "onto3d_ontology": repr(slug), "onto3d_entity_id": repr(eid)
-            }))
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = eid.split('/')[-1] if '/' in eid else eid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
+            all_ent.append(NodeItem(
+                ENTITY_NODE_ID, 
+                label=f"[{pre}] {display_label}", 
+                settings={
+                    "onto3d_ontology": repr(slug), 
+                    "onto3d_entity_id": repr(eid)
+                }
+            ))
         
         for pid, plab, ns in data["properties"]:
-            all_prop.append(NodeItem(PROPERTY_NODE_ID,
-                label=f"[{pre}] {plab}",
-                settings={"onto3d_ontology": repr(slug), "onto3d_property_id": repr(pid)}
+            # Estrai solo l'ultima parte dell'ID dopo l'ultimo /
+            short_id = pid.split('/')[-1] if '/' in pid else pid
+            
+            # Converti underscores in spazi
+            try:
+                from .rdf_utils import protege_to_blender_name
+                display_label = protege_to_blender_name(short_id)
+            except:
+                display_label = short_id.replace('_', ' ')
+            
+            all_prop.append(NodeItem(
+                PROPERTY_NODE_ID,
+                label=f"[{pre}] {display_label}",
+                settings={
+                    "onto3d_ontology": repr(slug), 
+                    "onto3d_property_id": repr(pid)
+                }
             ))
     
     if all_ent:
