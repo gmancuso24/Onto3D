@@ -31,7 +31,8 @@ def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
     _ensure_node_props()
-    _load_from_prefs_and_build()
+    # Use app handler to load after Blender is fully initialized
+    bpy.app.timers.register(_delayed_load, first_interval=0.1)
 
 def unregister():
     _unregister_all_categories()
@@ -75,7 +76,7 @@ class ONTO3D_PG_Ontology(PropertyGroup):
     )
 
 class ONTO3D_Preferences(AddonPreferences):
-    bl_idname = "onto3d"  # Nome fisso dell'addon
+    bl_idname = __package__.split('.')[0] if '.' in __package__ else __package__
 
     ontologies: CollectionProperty(type=ONTO3D_PG_Ontology)
     active_index: IntProperty(default=0)
@@ -97,10 +98,10 @@ class ONTO3D_Preferences(AddonPreferences):
         instr_col.label(text="2. Set a name, slug (unique ID), and prefix for the menu")
         instr_col.label(text="3. Choose source type: File (local .ttl/.owl/.rdf) or URL")
         instr_col.label(text="4. Select the file path or enter the URL")
-        instr_col.label(text="5. Click apply to build add your ontology to the permanent cache ")
-        instr_col.label(text="6. Click 'Reload Selected' to load the ontology from source")
-        instr_col.label(text="7. Enable/disable ontologies using the checkbox")
-        instr_col.label(text="Tip: Use 'Reload All' to refresh all enabled ontologies at once")
+        instr_col.label(text="5. Click 'Reload Selected' to load the ontology")
+        instr_col.label(text="6. Enable/disable ontologies using the checkbox")
+        instr_col.label(text="7. Preferences are saved automatically with Blender")
+        instr_col.label(text="Tip: Use 'Reload All' to refresh all enabled ontologies")
         
         layout.separator()
         
@@ -158,10 +159,12 @@ class ONTO3D_OT_OntologyAdd(Operator):
     bl_description = "Add a new ontology entry to import"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons["onto3d"].preferences
+        prefs = _get_prefs()
         item = prefs.ontologies.add()
         item.name = "New ontology"
         prefs.active_index = len(prefs.ontologies) - 1
+        # Save preferences
+        _save_preferences()
         return {'FINISHED'}
 
 class ONTO3D_OT_OntologyRemove(Operator):
@@ -171,7 +174,7 @@ class ONTO3D_OT_OntologyRemove(Operator):
     bl_description = "Remove the selected ontology and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons["onto3d"].preferences
+        prefs = _get_prefs()
         idx = prefs.active_index
         if 0 <= idx < len(prefs.ontologies):
             slug = prefs.ontologies[idx].slug.strip() or _slugify(prefs.ontologies[idx].name)
@@ -179,6 +182,8 @@ class ONTO3D_OT_OntologyRemove(Operator):
             prefs.ontologies.remove(idx)
             prefs.active_index = min(idx, len(prefs.ontologies)-1)
             _rebuild_node_categories()
+            # Save preferences
+            _save_preferences()
             self.report({'INFO'}, "Ontology removed and node menu rebuilt")
         return {'FINISHED'}
 
@@ -189,11 +194,13 @@ class ONTO3D_OT_OntologyReloadOne(Operator):
     bl_description = "Reload the selected ontology from source and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons["onto3d"].preferences
+        prefs = _get_prefs()
         if not (0 <= prefs.active_index < len(prefs.ontologies)):
             return {'CANCELLED'}
         _load_enabled_ontologies(prefs, only_index=prefs.active_index)
         _rebuild_node_categories()
+        # Save preferences
+        _save_preferences()
         self.report({'INFO'}, "Ontology reloaded")
         return {'FINISHED'}
 
@@ -204,9 +211,11 @@ class ONTO3D_OT_OntologyReloadAll(Operator):
     bl_description = "Reload all enabled ontologies from source and rebuild the node menu"
     bl_options = {'REGISTER', 'INTERNAL'}
     def execute(self, context):
-        prefs = context.preferences.addons["onto3d"].preferences
+        prefs = _get_prefs()
         _load_enabled_ontologies(prefs)
         _rebuild_node_categories()
+        # Save preferences
+        _save_preferences()
         self.report({'INFO'}, "All ontologies reloaded")
         return {'FINISHED'}
 
@@ -225,16 +234,37 @@ class ONTO3D_OT_OntologyClearCache(Operator):
     """Clear the cached data for this ontology and force reload from source"""
     bl_idname = "onto3d.ontology_clear_cache"
     bl_label = "Clear Cache"
-    bl_description = "Clear cached ontology data and force reload from source file/URL on next restart"
+    bl_description = "Clear cached ontology data and force reload from source file/URL on next reload"
     bl_options = {'REGISTER', 'INTERNAL'}
     
     def execute(self, context):
-        prefs = context.preferences.addons["onto3d"].preferences
+        prefs = _get_prefs()
         if 0 <= prefs.active_index < len(prefs.ontologies):
             prefs.ontologies[prefs.active_index].cached_data = ""
-            self.report({'INFO'}, "Cache cleared. Reload to re-parse from source.")
+            # Save preferences
+            _save_preferences()
+            self.report({'INFO'}, "Cache cleared. Click 'Reload Selected' to re-parse from source.")
         return {'FINISHED'}
     
+# =========================
+# Utility functions
+# =========================
+def _get_prefs():
+    """Get addon preferences safely"""
+    try:
+        addon_name = __package__.split('.')[0] if '.' in __package__ else __package__
+        return bpy.context.preferences.addons[addon_name].preferences
+    except Exception as e:
+        print(f"[Onto3D] Error getting preferences: {e}")
+        return None
+
+def _save_preferences():
+    """Force save user preferences to disk"""
+    try:
+        bpy.ops.wm.save_userpref()
+    except Exception as e:
+        print(f"[Onto3D] Warning: Could not save preferences: {e}")
+
 # =========================
 # Parse / Load
 # =========================
@@ -288,8 +318,11 @@ def _parse_ontology_from_source(item: ONTO3D_PG_Ontology):
     return {"name": item.name.strip() or slug, "prefix": prefix, "entities": entities, "properties": properties}
 
 
-def _load_enabled_ontologies(prefs: ONTO3D_Preferences, only_index=None):
+def _load_enabled_ontologies(prefs, only_index=None):
     """Load ontologies from preferences, using cache when available"""
+    if not prefs:
+        return
+        
     targets = range(len(prefs.ontologies)) if only_index is None else [only_index]
     for i in targets:
         it = prefs.ontologies[i]
@@ -475,12 +508,22 @@ def _ensure_node_props():
         pass
 
 # =========================
-# Load from prefs on startup
+# Load from prefs on startup (delayed)
 # =========================
-def _load_from_prefs_and_build():
-    prefs = bpy.context.preferences.addons["onto3d"].preferences
-    _load_enabled_ontologies(prefs)
-    _rebuild_node_categories()
+def _delayed_load():
+    """Load ontologies from preferences after Blender is initialized"""
+    try:
+        prefs = _get_prefs()
+        if prefs:
+            print("[Onto3D] Loading ontologies from preferences...")
+            _load_enabled_ontologies(prefs)
+            _rebuild_node_categories()
+            print(f"[Onto3D] Loaded {len(ONTO_REG)} ontologies")
+    except Exception as e:
+        print(f"[Onto3D] Error during delayed load: {e}")
+        import traceback
+        traceback.print_exc()
+    return None  # Don't repeat
 
 # =========================
 # Class registry

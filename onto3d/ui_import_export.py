@@ -1,6 +1,6 @@
 """
 ui_import_export.py - UI Panel and operators for RDF Import/Export
-Add this panel to the Onto3D N-Panel in Node Editor
+Separate panels for Import and Export in the Onto3D N-Panel
 """
 
 import bpy
@@ -8,12 +8,39 @@ from bpy.types import Panel, Operator
 from bpy.props import StringProperty
 
 
-class ONTO3D_PT_ImportExport(Panel):
-    """Panel for importing/exporting RDF graphs"""
+class ONTO3D_PT_Import(Panel):
+    """Panel for importing RDF graphs"""
     bl_space_type = 'NODE_EDITOR'
     bl_region_type = 'UI'
     bl_category = 'Onto3D'
-    bl_label = 'Import / Export Graph'
+    bl_label = 'Import'
+    bl_options = {'DEFAULT_CLOSED'}
+    
+    @classmethod
+    def poll(cls, context):
+        return context.area and context.area.type == 'NODE_EDITOR'
+    
+    def draw(self, context):
+        layout = self.layout
+        
+        # Import section
+        box = layout.box()
+        box.label(text="Import TTL Graph", icon='IMPORT')
+        col = box.column(align=True)
+        col.scale_y = 0.8
+        col.label(text="Import RDF/Turtle file")
+        col.label(text="Includes reasoning results")
+        
+        box.separator()
+        box.operator("onto3d.import_graph_ttl", text="Import Graph (TTL)", icon='APPEND_BLEND')
+
+
+class ONTO3D_PT_Export(Panel):
+    """Panel for exporting RDF graphs"""
+    bl_space_type = 'NODE_EDITOR'
+    bl_region_type = 'UI'
+    bl_category = 'Onto3D'
+    bl_label = 'Export'
     bl_options = {'DEFAULT_CLOSED'}
     
     @classmethod
@@ -27,110 +54,12 @@ class ONTO3D_PT_ImportExport(Panel):
         box = layout.box()
         box.label(text="Export to Protégé", icon='EXPORT')
         col = box.column(align=True)
+        col.scale_y = 0.8
         col.label(text="Export current graph as RDF/Turtle")
         col.label(text="Compatible with Protégé OWL editor")
-        col.operator("onto3d.export_graph_ttl", text="Export Graph (TTL)", icon='FILE_TICK')
         
-        # Import section
-        layout.separator()
-        box = layout.box()
-        box.label(text="Import from Protégé", icon='IMPORT')
-        col = box.column(align=True)
-        col.label(text="Import RDF/Turtle file")
-        col.label(text="Includes reasoning results")
-        col.operator("onto3d.import_graph_ttl", text="Import Graph (TTL)", icon='APPEND_BLEND')
-        
-        # Auto-layout section
-        layout.separator()
-        box = layout.box()
-        box.label(text="Auto-Layout", icon='STICKY_UVS_LOC')
-        
-        # Get node tree to check if layout is needed
-        space = getattr(context, "space_data", None)
-        node_tree = None
-        if space and space.type == 'NODE_EDITOR':
-            node_tree = space.edit_tree or space.node_tree
-        
-        if node_tree and node_tree.nodes:
-            from .graph_layout import estimate_graph_complexity
-            suggested = estimate_graph_complexity(node_tree)
-            
-            col = box.column(align=True)
-            col.label(text=f"Suggested: {suggested.title()}", icon='INFO')
-            
-            row = col.row(align=True)
-            op = row.operator("onto3d.auto_layout", text="Hierarchical")
-            op.algorithm = 'hierarchical'
-            op = row.operator("onto3d.auto_layout", text="Spring")
-            op.algorithm = 'spring'
-            
-            row = col.row(align=True)
-            op = row.operator("onto3d.auto_layout", text="Circular")
-            op.algorithm = 'circular'
-            op = row.operator("onto3d.auto_layout", text="Grid")
-            op.algorithm = 'grid'
-        else:
-            box.label(text="No nodes to layout", icon='INFO')
-        
-        # Info section
-        layout.separator()
-        box = layout.box()
-        box.label(text="Workflow", icon='QUESTION')
-        col = box.column(align=True)
-        col.scale_y = 0.8
-        col.label(text="1. Export graph from Blender")
-        col.label(text="2. Open TTL in Protégé")
-        col.label(text="3. Run reasoner (e.g., Pellet, HermiT)")
-        col.label(text="4. Save inferred ontology")
-        col.label(text="5. Import back to Blender")
-
-
-class ONTO3D_OT_AutoLayout(Operator):
-    """Automatically arrange nodes using graph layout algorithm"""
-    bl_idname = "onto3d.auto_layout"
-    bl_label = "Auto Layout Nodes"
-    bl_options = {'REGISTER', 'UNDO'}
-    
-    algorithm: StringProperty(
-        name="Algorithm",
-        description="Layout algorithm to use",
-        default='hierarchical'
-    )
-    
-    spacing: bpy.props.IntProperty(
-        name="Spacing",
-        description="Distance between nodes",
-        default=400,
-        min=100,
-        max=2000
-    )
-    
-    def execute(self, context):
-        space = getattr(context, "space_data", None)
-        if not space or space.type != 'NODE_EDITOR':
-            self.report({'ERROR'}, "Open a Node Editor")
-            return {'CANCELLED'}
-        
-        node_tree = space.edit_tree or space.node_tree
-        if not node_tree:
-            self.report({'ERROR'}, "No node tree active")
-            return {'CANCELLED'}
-        
-        if not node_tree.nodes:
-            self.report({'WARNING'}, "No nodes to layout")
-            return {'CANCELLED'}
-        
-        try:
-            from .graph_layout import auto_layout_nodes
-            auto_layout_nodes(node_tree, algorithm=self.algorithm, spacing=self.spacing)
-            self.report({'INFO'}, f"Applied {self.algorithm} layout")
-            return {'FINISHED'}
-        except Exception as e:
-            self.report({'ERROR'}, f"Layout failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return {'CANCELLED'}
-
+        box.separator()
+        box.operator("onto3d.export_graph_ttl", text="Export Graph (TTL)", icon='FILE_TICK')
 
 class ONTO3D_OT_CheckRDFLib(Operator):
     """Check if rdflib is installed and show installation instructions"""
@@ -154,8 +83,8 @@ class ONTO3D_OT_CheckRDFLib(Operator):
 
 # Registration
 _CLASSES = (
-    ONTO3D_PT_ImportExport,
-    ONTO3D_OT_AutoLayout,
+    ONTO3D_PT_Import,
+    ONTO3D_PT_Export,
     ONTO3D_OT_CheckRDFLib,
 )
 
