@@ -1,24 +1,54 @@
 # Changelog
 
-All notable changes to **Onto3D** derived from the provided files (`v01` → `v04_2`).  
+All notable changes to **Onto3D** derived from the provided files (`v0.1` → `v1.0`).  
 Versioning follows **SemVer**: `MAJOR.MINOR.PATCH`.
+
+## [1.0] - 2025-10-10
+New Features
+
+#### Multi-language Support: Added English language option alongside Italian
+Language Persistence: Language preference now saved in localStorage and persists across sessions
+Enhanced Navigation: New language switcher in header for easy switching between IT/EN
+
+#### UI/UX Improvements
+Responsive Design Enhancements: Improved mobile layout and touch interactions
+Visual Polish: Updated color scheme with better contrast and modern aesthetics
+Interactive Elements: Added hover effects and smooth transitions throughout the interface
+Loading States: Implemented proper loading indicators for better user feedback
+
+#### Technical Improvements
+Code Refactoring: Cleaned up component structure and improved code organization
+Performance Optimization: Reduced unnecessary re-renders and improved overall performance
+Error Handling: Added comprehensive error handling for edge cases
+Accessibility: Improved keyboard navigation and screen reader support
+
+#### Bug Fixes
+Fixed image URL handling and loading issues
+Resolved spacing inconsistencies in mobile view
+Corrected translation inconsistencies across the application
+Fixed localStorage persistence issues
+
+#### Content Updates
+Updated product descriptions and feature highlights
+Refined copy for better clarity in both languages
+Added missing translations for new features
 
 ## [0.5] - 2025-10-05
 ### 🧩 Node ↔ Geometry Integration & Enhanced UI
 
-#### 🚀 Highlights
+#### Highlights
 - Full **bidirectional link system** between Onto3D nodes and 3D geometries.  
   Connections can be created, updated, and removed while maintaining synchronization both ways.
 - Unified **Viewport and Node Editor integration** through coordinated panels.
 
-#### ✨ New Features
-- **🔗 Geometry Connection Panel**
+#### New Features
+- ** Geometry Connection Panel**
   - Added “Connect Geometry” section in the Node Editor N-Panel.
   - Commands for *Create Connection*, *Break Connection*, and *Update Links*.
   - Displays a clear list of linked geometries.
   - Warning indicator when linked objects are renamed or missing.
 
-- **🧭 3D Viewport Panel — “Linked Node Info”**
+- ** 3D Viewport Panel — “Linked Node Info”**
   - Shows node information directly in the 3D Viewport for the selected object.
   - Displays node name, type, and key properties (Title, Description, IRI, etc.).
   - Added buttons:
@@ -30,7 +60,7 @@ Versioning follows **SemVer**: `MAJOR.MINOR.PATCH`.
   - Safe context handling (`temp_override`) for all viewport operations.
   - Reorganized N-Panel sections (*Info* and *Connect Geometry*), removed obsolete *Quick IRI*.
 
-#### 🧱 Structural & Code Improvements
+#### Structural & Code Improvements
 - Modularized add-on: `__init__.py`, `nodes.py`, `ui_panels.py`, and `preferences_ontology.py`.
 - Hidden internal properties (`onto3d_ontology`, `onto3d_entity_id`, `onto3d_property_id`, `onto3d_links`) from UI.
 - Removed automatic display of custom properties.
@@ -39,7 +69,7 @@ Versioning follows **SemVer**: `MAJOR.MINOR.PATCH`.
   - Adds `https://` automatically if the scheme is missing.
 - Version-safe implementation of Local View toggle and View Selected operators.
 
-#### 🧰 Developer Notes
+#### Developer Notes
 - GitHub Actions workflow: `Build add-on ZIP`
   - Automatically zips `onto3d/` on tag push (`v*`) and uploads as release asset.
   - Produces `onto3d-v0.5.zip` installable via *Preferences → Add-ons → Install …*
