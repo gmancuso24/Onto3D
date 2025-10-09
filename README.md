@@ -1,8 +1,8 @@
-# Onto3D – CIDOC-like Graph Editor for Blender
+# Onto3D – Ontology Graph Editor for Blender
 
 **Version 0.5**
 
-Onto3D is a Blender add-on designed to create, visualize, and manage semantic networks based on the **CIDOC-CRM** and related ontologies (CRMarchaeo, CRMsci, etc.).  
+Onto3D is a Blender add-on designed to create, visualize, and manage semantic networks based.  
 It allows researchers to model archaeological and heritage data directly inside Blender’s node editor, linking entities, properties, and geometries in a unified visual graph.
 
 ---
