@@ -643,31 +643,30 @@ class ONTO3D_PT_GraphManagement(Panel):
             node_tree = space.edit_tree or space.node_tree
         
         if node_tree and node_tree.nodes:
-            try:
-                from .graph_layout import estimate_graph_complexity
-                suggested = estimate_graph_complexity(node_tree)
-                
-                col = layout.column(align=True)
-                col.scale_y = 0.8
-                col.label(text="Automatically arrange nodes", icon='STICKY_UVS_LOC')
-                col.label(text="using graph layout algorithms.")
-                
-                layout.separator()
-                
-                # Show suggested algorithm if it's one we support
-                if suggested in ('hierarchical', 'grid'):
-                    box = layout.box()
-                    box.label(text=f"Suggested: {suggested.title()}", icon='INFO')
-                
-                row = layout.row(align=True)
-                op = row.operator("onto3d.auto_layout", text="Hierarchical", icon='OUTLINER')
-                op.algorithm = 'hierarchical'
-                op = row.operator("onto3d.auto_layout", text="Grid", icon='GRID')
-                op.algorithm = 'grid'
-            except ImportError:
-                col = layout.column(align=True)
-                col.label(text="Auto-layout available", icon='INFO')
-                col.label(text="in Import/Export panel")
+            col = layout.column(align=True)
+            col.scale_y = 0.8
+            col.label(text="Automatically arrange nodes", icon='STICKY_UVS_LOC')
+            col.label(text="using graph layout algorithms.")
+            
+            layout.separator()
+            
+            # Hierarchical options
+            box = layout.box()
+            box.label(text="Hierarchical Layout", icon='OUTLINER')
+            
+            row = box.row(align=True)
+            op = row.operator("onto3d.auto_layout", text="Left→Right", icon='FORWARD')
+            op.algorithm = 'hierarchical'
+            op.orientation = 'LR'
+            
+            op = row.operator("onto3d.auto_layout", text="Top↓Bottom", icon='SORT_DESC')
+            op.algorithm = 'hierarchical'
+            op.orientation = 'TB'
+            
+            # Grid option
+            layout.separator()
+            op = layout.operator("onto3d.auto_layout", text="Grid Layout", icon='GRID')
+            op.algorithm = 'grid'
         else:
             col = layout.column(align=True)
             col.scale_y = 0.8
@@ -684,6 +683,16 @@ class ONTO3D_OT_AutoLayout(Operator):
         name="Algorithm",
         description="Layout algorithm to use",
         default='hierarchical'
+    )
+    
+    orientation: bpy.props.EnumProperty(
+        name="Orientation",
+        description="Layout direction",
+        items=[
+            ('LR', "Left to Right →", "Horizontal flow (follows socket direction)"),
+            ('TB', "Top to Bottom ↓", "Vertical flow"),
+        ],
+        default='LR'
     )
     
     spacing: bpy.props.IntProperty(
@@ -711,15 +720,21 @@ class ONTO3D_OT_AutoLayout(Operator):
         
         try:
             from .graph_layout import auto_layout_nodes
-            auto_layout_nodes(node_tree, algorithm=self.algorithm, spacing=self.spacing)
-            self.report({'INFO'}, f"Applied {self.algorithm} layout")
+            auto_layout_nodes(
+                node_tree, 
+                algorithm=self.algorithm,
+                orientation=self.orientation,
+                spacing=self.spacing
+            )
+            
+            orientation_name = "Left→Right" if self.orientation == 'LR' else "Top↓Bottom"
+            self.report({'INFO'}, f"Applied {self.algorithm} layout ({orientation_name})")
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, f"Layout failed: {e}")
             import traceback
             traceback.print_exc()
             return {'CANCELLED'}
-
 
 class ONTO3D_OT_FrameLinkedNode(Operator):
     """Frame the Node linked to the active selected object"""

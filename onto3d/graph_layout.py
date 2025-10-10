@@ -1,6 +1,6 @@
 """
 graph_layout.py - Auto-layout algorithms for node positioning
-Supports hierarchical, spring, circular, and grid layouts
+Supports hierarchical (LR/TB), and grid layouts
 """
 
 import bpy
@@ -8,179 +8,189 @@ from typing import Dict, Tuple, List, Set
 from .rdf_utils import get_linked_entity_node
 
 
-def auto_layout_nodes(node_tree, algorithm='hierarchical', spacing=400):
+def auto_layout_nodes(node_tree, algorithm='hierarchical', orientation='LR', spacing=400):
     """
     Auto-layout nodes in the node tree using specified algorithm.
     
     Args:
         node_tree: Blender NodeTree
-        algorithm: 'hierarchical', 'spring', 'circular', 'grid'
+        algorithm: 'hierarchical' or 'grid'
+        orientation: 'LR' (Left-Right) or 'TB' (Top-Bottom) - only for hierarchical
         spacing: Base spacing between nodes
     """
-    try:
-        import networkx as nx
-        use_networkx = True
-    except ImportError:
-        print("[Onto3D] NetworkX not found, using fallback grid layout")
-        use_networkx = False
-    
-    if not use_networkx or algorithm == 'grid':
+    if algorithm == 'grid':
         _simple_grid_layout(node_tree, spacing)
         return
     
-    # Build NetworkX graph
-    G = _build_networkx_graph(node_tree)
-    
-    if not G.nodes():
+    if algorithm == 'hierarchical':
+        _hierarchical_layout(node_tree, orientation, spacing)
         return
     
-    # Calculate positions based on algorithm
-    if algorithm == 'hierarchical':
-        pos = _hierarchical_layout(G)
-    elif algorithm == 'spring':
-        import networkx as nx
-        pos = nx.spring_layout(G, k=2, iterations=50)
-    elif algorithm == 'circular':
-        import networkx as nx
-        pos = nx.circular_layout(G)
-    else:
-        import networkx as nx
-        pos = nx.kamada_kawai_layout(G)
-    
-    # Apply positions to Blender nodes
-    _apply_positions(node_tree, pos, spacing)
+    # Fallback
+    _simple_grid_layout(node_tree, spacing)
 
 
-def _build_networkx_graph(node_tree):
-    """Build NetworkX directed graph from Blender node tree"""
-    import networkx as nx
-    G = nx.DiGraph()
+def _hierarchical_layout(node_tree, orientation='LR', spacing=400):
+    """
+    Hierarchical layout with Left-Right or Top-Bottom orientation.
     
-    # Add entity nodes
-    for node in node_tree.nodes:
-        if node.bl_idname == "Onto3DNodeEntity":
-            G.add_node(node.name, node_obj=node, node_type='entity')
+    Args:
+        node_tree: Blender NodeTree
+        orientation: 'LR' (default, follows socket direction) or 'TB'
+        spacing: Distance between layers
+    """
+    # Build graph structure
+    entities = [n for n in node_tree.nodes if n.bl_idname == "Onto3DNodeEntity"]
     
-    # Add edges from property connections
+    if not entities:
+        return
+    
+    # Build adjacency info: node -> list of children
+    children_map = {}  # entity.name -> [child entity names]
+    parent_count = {}  # entity.name -> number of parents
+    
+    for entity in entities:
+        children_map[entity.name] = []
+        parent_count[entity.name] = 0
+    
+    # Analyze connections through property nodes
     for node in node_tree.nodes:
         if node.bl_idname == "Onto3DNodeProperty":
             subject = get_linked_entity_node(node.inputs[0])
             obj = get_linked_entity_node(node.outputs[0])
             
-            if subject and obj:
-                G.add_edge(subject.name, obj.name, via=node.name, property_node=node)
+            if subject and obj and subject.name in children_map:
+                children_map[subject.name].append(obj.name)
+                if obj.name in parent_count:
+                    parent_count[obj.name] += 1
     
-    return G
-
-
-def _hierarchical_layout(G) -> Dict[str, Tuple[float, float]]:
-    """
-    Hierarchical top-down layout (Sugiyama-style).
-    Root nodes at top, children below in layers.
-    """
-    import networkx as nx
-    
-    # Find root nodes (no predecessors)
-    roots = [n for n in G.nodes() if G.in_degree(n) == 0]
+    # Find root nodes (no parents or minimal parents)
+    roots = [name for name, count in parent_count.items() if count == 0]
     
     if not roots:
-        # No clear roots: try to find minimal set
-        try:
-            # Find nodes with minimal in-degree
-            min_in = min(G.in_degree(n) for n in G.nodes())
-            roots = [n for n in G.nodes() if G.in_degree(n) == min_in]
-        except ValueError:
-            roots = [list(G.nodes())[0]] if G.nodes() else []
+        # No clear roots: use nodes with minimum parent count
+        min_parents = min(parent_count.values()) if parent_count else 0
+        roots = [name for name, count in parent_count.items() if count == min_parents]
     
-    pos = {}
+    if not roots:
+        # Still no roots: just use first node
+        roots = [entities[0].name]
+    
+    # Assign layers using BFS
+    layers = {}  # layer_num -> [node_names]
     visited = set()
-    layer_nodes = {}  # layer -> list of nodes
+    node_layer = {}  # node_name -> layer_num
     
-    def assign_layers(node, layer):
-        """Recursively assign layer numbers to nodes"""
-        if node in visited:
-            return
-        visited.add(node)
+    def assign_layers_bfs(start_nodes):
+        queue = [(name, 0) for name in start_nodes]
         
-        if layer not in layer_nodes:
-            layer_nodes[layer] = []
-        layer_nodes[layer].append(node)
+        while queue:
+            node_name, layer = queue.pop(0)
+            
+            if node_name in visited:
+                # If already visited, update to deeper layer if needed
+                if node_name in node_layer and layer > node_layer[node_name]:
+                    # Remove from old layer
+                    old_layer = node_layer[node_name]
+                    if node_name in layers.get(old_layer, []):
+                        layers[old_layer].remove(node_name)
+                    # Add to new layer
+                    node_layer[node_name] = layer
+                    if layer not in layers:
+                        layers[layer] = []
+                    layers[layer].append(node_name)
+                continue
+            
+            visited.add(node_name)
+            node_layer[node_name] = layer
+            
+            if layer not in layers:
+                layers[layer] = []
+            layers[layer].append(node_name)
+            
+            # Add children to queue
+            for child_name in children_map.get(node_name, []):
+                queue.append((child_name, layer + 1))
+    
+    # Assign layers starting from roots
+    assign_layers_bfs(roots)
+    
+    # Handle disconnected nodes
+    for entity in entities:
+        if entity.name not in visited:
+            assign_layers_bfs([entity.name])
+    
+    # Calculate positions in logical coordinates
+    # logical: (layer_index, cross_position)
+    logical_positions = {}
+    
+    max_layer = max(layers.keys()) if layers else 0
+    
+    for layer_num in sorted(layers.keys()):
+        nodes_in_layer = layers[layer_num]
+        num_nodes = len(nodes_in_layer)
         
-        # Process children
-        for child in G.successors(node):
-            assign_layers(child, layer + 1)
-    
-    # Assign all nodes to layers
-    for root in roots:
-        assign_layers(root, 0)
-    
-    # Handle unreached nodes (disconnected components)
-    for node in G.nodes():
-        if node not in visited:
-            assign_layers(node, 0)
-    
-    # Position nodes within each layer
-    max_layer = max(layer_nodes.keys()) if layer_nodes else 0
-    
-    for layer, nodes in layer_nodes.items():
-        y = -layer  # Negative Y goes down
-        num_nodes = len(nodes)
+        # Sort nodes by average parent position for better layout
+        if layer_num > 0:
+            def avg_parent_pos(node_name):
+                parents = [n for n, children in children_map.items() if node_name in children]
+                if not parents:
+                    return 0
+                parent_positions = [logical_positions.get(p, (0, 0))[1] for p in parents if p in logical_positions]
+                return sum(parent_positions) / len(parent_positions) if parent_positions else 0
+            
+            nodes_in_layer.sort(key=avg_parent_pos)
         
-        # Center the layer horizontally
-        start_x = -(num_nodes - 1) / 2
+        # Calculate vertical spacing dynamically
+        # More nodes = tighter spacing
+        import math
+        vertical_spacing = max(1.0, 3.0 / math.sqrt(max(1, num_nodes)))
         
-        for i, node in enumerate(nodes):
-            x = start_x + i
-            pos[node] = (x, y)
+        # Center nodes vertically
+        start_cross = -(num_nodes - 1) * vertical_spacing / 2
+        
+        for i, node_name in enumerate(nodes_in_layer):
+            cross_pos = start_cross + i * vertical_spacing
+            logical_positions[node_name] = (layer_num, cross_pos)
     
-    # Optional: adjust X positions to minimize edge crossings
-    # (simplified version - could be improved with proper Sugiyama algorithm)
-    for layer in range(1, max_layer + 1):
-        if layer not in layer_nodes:
+    # Convert logical to physical coordinates based on orientation
+    entity_map = {e.name: e for e in entities}
+    
+    for node_name, (layer, cross_pos) in logical_positions.items():
+        entity = entity_map.get(node_name)
+        if not entity:
             continue
         
-        nodes = layer_nodes[layer]
-        # Sort by average parent X position
-        def avg_parent_x(n):
-            parents = list(G.predecessors(n))
-            if not parents:
-                return pos[n][0]
-            return sum(pos[p][0] for p in parents) / len(parents)
-        
-        nodes.sort(key=avg_parent_x)
-        
-        # Re-assign X positions
-        start_x = -(len(nodes) - 1) / 2
-        for i, node in enumerate(nodes):
-            pos[node] = (start_x + i, pos[node][1])
+        if orientation == 'LR':
+            # Left to Right: layer -> X, cross -> Y
+            entity.location = (layer * spacing, cross_pos * spacing)
+        elif orientation == 'TB':
+            # Top to Bottom: cross -> X, -layer -> Y (negative because Y+ is up)
+            entity.location = (cross_pos * spacing, -layer * spacing)
     
-    return pos
-
-
-def _apply_positions(node_tree, pos: Dict[str, Tuple[float, float]], spacing: float):
-    """Apply calculated positions to Blender nodes"""
-    # Apply to entity nodes
-    for node_name, (x, y) in pos.items():
-        node = node_tree.nodes.get(node_name)
-        if node:
-            node.location = (x * spacing, y * spacing)
-    
-    # Position property nodes between connected entities
+    # Position property nodes between their connected entities
     for node in node_tree.nodes:
         if node.bl_idname == "Onto3DNodeProperty":
             subject = get_linked_entity_node(node.inputs[0])
             obj = get_linked_entity_node(node.outputs[0])
             
             if subject and obj:
-                # Place halfway between subject and object, slightly offset
+                # Place property node between subject and object
                 mid_x = (subject.location.x + obj.location.x) / 2
-                mid_y = (subject.location.y + obj.location.y) / 2 + spacing * 0.25
-                node.location = (mid_x, mid_y)
+                mid_y = (subject.location.y + obj.location.y) / 2
+                
+                # Small offset perpendicular to connection
+                if orientation == 'LR':
+                    # Offset slightly upward
+                    node.location = (mid_x, mid_y + spacing * 0.15)
+                elif orientation == 'TB':
+                    # Offset slightly to the right
+                    node.location = (mid_x + spacing * 0.15, mid_y)
 
 
 def _simple_grid_layout(node_tree, spacing: float):
     """
-    Fallback grid layout (no NetworkX required).
+    Fallback grid layout (no external dependencies required).
     Places entity nodes in a grid, property nodes near their subjects.
     """
     entities = [n for n in node_tree.nodes if n.bl_idname == "Onto3DNodeEntity"]
@@ -246,10 +256,8 @@ def estimate_graph_complexity(node_tree) -> str:
     
     if is_hierarchical:
         return 'hierarchical'
-    elif num_entities < 20:
-        return 'spring'
     elif num_entities < 50:
-        return 'circular'
+        return 'hierarchical'  # Still works well for medium graphs
     else:
         return 'grid'
 
@@ -271,4 +279,4 @@ def _is_tree_like(connections: Dict[str, List[str]], entities) -> bool:
     num_edges = sum(len(targets) for targets in connections.values())
     num_nodes = len(all_nodes)
     
-    return len(roots) in (1, 2, 3) and abs(num_edges - (num_nodes - len(roots))) < 3
+    return len(roots) in (1, 2, 3) and abs(num_edges - (num_nodes - len(roots))) < 5
